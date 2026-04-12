@@ -146,6 +146,7 @@ export async function createHypothesis(data: CreateHypothesisInput): Promise<Hyp
     findings: [],
     conclusion: null,
     visualization_svg: null,
+    visualization_mermaid: null,
     failure_reason: null,
     experiment_code: null,
     raw_output: null,

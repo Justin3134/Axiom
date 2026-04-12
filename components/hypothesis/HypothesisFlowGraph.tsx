@@ -21,6 +21,7 @@ import ReactFlow, {
 import "reactflow/dist/style.css"
 import type { ResearchProgram, Hypothesis, Briefing } from "@/lib/types"
 import { DOMAIN_LABELS } from "@/lib/types"
+import { isExecutionFailure } from "@/lib/utils"
 
 // ─── Accent colors per root hypothesis index ──────────────────
 const ACCENT_COLORS = [
@@ -173,6 +174,7 @@ function HypothesisNode({ data }: { data: HypothesisNodeData }) {
   const isDone    = h.status === "succeeded"
   const isFailed  = h.status === "failed"
   const isQueued  = h.status === "queued"
+  const isExecFail = isFailed && isExecutionFailure(h.failure_reason, h.raw_output)
 
   const borderColor = isRunning ? accent + "cc" : isDone ? accent + "aa" : isFailed ? accent + "88" : accent + "44"
   const stripeColor = isQueued ? accent + "55" : accent
@@ -212,10 +214,11 @@ function HypothesisNode({ data }: { data: HypothesisNodeData }) {
           <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2, flexShrink: 0 }}>
             <span style={{
               fontSize: 8, padding: "2px 5px", borderRadius: 3,
-              background: cfg.badgeBg, color: cfg.badgeColor,
+              background: isExecFail ? "rgba(234,179,8,0.14)" : cfg.badgeBg,
+              color: isExecFail ? "#eab308" : cfg.badgeColor,
               letterSpacing: "0.05em", fontWeight: 700, textTransform: "uppercase" as const,
             }}>
-              {cfg.label}
+              {isExecFail ? "Error" : cfg.label}
             </span>
             {h.depth > 0 && (
               <span style={{
@@ -252,7 +255,7 @@ function HypothesisNode({ data }: { data: HypothesisNodeData }) {
           {displayText ? (
             <div style={{
               fontSize: 9, lineHeight: 1.45,
-              color: isFailed ? "#ef444488" : isDone ? "#a1a1aa" : "#71717a",
+              color: isExecFail ? "#eab30888" : isFailed ? "#ef444488" : isDone ? "#a1a1aa" : "#71717a",
               display: "-webkit-box", WebkitLineClamp: 2,
               WebkitBoxOrient: "vertical" as const, overflow: "hidden",
             }}>
@@ -274,10 +277,11 @@ function HypothesisNode({ data }: { data: HypothesisNodeData }) {
         {onOpen && (
           <div style={{
             marginTop: 5, fontSize: 8,
-            color: accent + "77", letterSpacing: "0.06em",
+            color: isExecFail ? "#eab30877" : accent + "77",
+            letterSpacing: "0.06em",
             textTransform: "uppercase", textAlign: "right",
           }}>
-            Open →
+            {isExecFail ? "↺ Retry →" : "Open →"}
           </div>
         )}
       </div>

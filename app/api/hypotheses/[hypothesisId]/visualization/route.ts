@@ -1,12 +1,12 @@
 import { NextRequest, NextResponse } from "next/server"
 import { getHypothesis, updateHypothesis } from "@/lib/redis/db"
-import { doClient, CODE_MODEL } from "@/lib/ai/client"
+import { doClient, REASONING_MODEL } from "@/lib/ai/client"
 
 interface Params {
   params: Promise<{ hypothesisId: string }>
 }
 
-// ── GET — return stored SVG ────────────────────────────────────
+// ── GET — return stored diagram (mermaid preferred, svg fallback) ──
 export async function GET(_req: NextRequest, { params }: Params) {
   const { hypothesisId } = await params
 
@@ -15,10 +15,13 @@ export async function GET(_req: NextRequest, { params }: Params) {
     return NextResponse.json({ error: "Hypothesis not found" }, { status: 404 })
   }
 
-  return NextResponse.json({ svg: hypothesis.visualization_svg ?? null })
+  return NextResponse.json({
+    mermaid: hypothesis.visualization_mermaid ?? null,
+    svg: hypothesis.visualization_svg ?? null,
+  })
 }
 
-// ── POST — generate SVG via LLM, persist, return ──────────────
+// ── POST — generate Mermaid diagram via LLM, persist, return ──────
 export async function POST(_req: NextRequest, { params }: Params) {
   const { hypothesisId } = await params
 
@@ -27,48 +30,79 @@ export async function POST(_req: NextRequest, { params }: Params) {
     return NextResponse.json({ error: "Hypothesis not found" }, { status: 404 })
   }
 
-  const approachSnippet = (hypothesis.approach || hypothesis.description || "").slice(0, 200)
-  const statusLabel = hypothesis.status ?? "unknown"
+  // Build structured context from all available hypothesis fields
+  const findingsSummary = (hypothesis.findings ?? [])
+    .map((f) => `- [${f.type}] ${f.description}`)
+    .join("\n")
 
-  const systemPrompt = `You are an SVG diagram generator. Output ONLY a single valid SVG element with no explanation, no markdown, no code fences. The SVG must:
-- Have width="800" height="360" viewBox="0 0 800 360"
-- Use a dark background (#080809) as a full-size rect covering the whole canvas
-- Render a detailed, wide-format scientific diagram representing the research approach
-- Use geometric shapes: nodes (circles/rects), directed arrows, flow paths, data charts, or network graphs
-- Use accent colors: #3b82f6 (blue), #8b5cf6 (violet), #22c55e (green), #f59e0b (amber), #ef4444 (red)
-- Include 4–8 meaningful text labels using font-family="monospace" font-size="11" fill="#94a3b8"
-- Use thin lines (stroke-width="1" or "1.5") for connectors and borders
-- Add subtle grid lines or axis lines if appropriate (stroke="#1a1a1e")
-- Keep it elegant and minimal — like a scientific diagram or research flowchart
-- Use the full 800×360 canvas — spread elements across the width
-- No external references, no images, no scripts`
+  const contextBlock = [
+    `Title: ${hypothesis.title}`,
+    hypothesis.approach    ? `Approach: ${hypothesis.approach}`       : null,
+    hypothesis.description ? `Description: ${hypothesis.description}` : null,
+    hypothesis.conclusion  ? `Conclusion: ${hypothesis.conclusion}`   : null,
+    findingsSummary        ? `Findings:\n${findingsSummary}`          : null,
+    `Status: ${hypothesis.status ?? "unknown"}`,
+  ].filter(Boolean).join("\n\n")
 
-  const userPrompt = `Hypothesis: "${hypothesis.title}"
-Approach: ${approachSnippet}
-Status: ${statusLabel}
+  const systemPrompt = `You are a scientific diagram generator. Output ONLY valid Mermaid diagram syntax — no explanation, no markdown code fences, no backticks, no prose.
 
-Generate an SVG diagram that visually represents this research hypothesis.`
+DIAGRAM TYPE — choose whichever best represents the hypothesis:
+- flowchart LR   for left-to-right experimental pipelines or workflows
+- flowchart TD   for top-down hierarchies, decision trees, or causal chains
+- sequenceDiagram for step-by-step temporal or interaction sequences
 
-  let svg: string
+RULES
+- 5–9 nodes total
+- Use 1–3 subgraph blocks to group related concepts (subgraph id [Label])
+- Node IDs must be concise camelCase words (e.g. replicationFork, checkpointSignal)
+- Node labels max 30 characters — use short, meaningful phrases
+- Use descriptive arrow labels for key relationships: A -->|inhibits| B
+- For decision/branch nodes use rhombus shape: node{Label}
+- For terminal/result nodes use stadium shape: node([Label])
+
+EXAMPLE OUTPUT (for reference style — do not copy content):
+flowchart LR
+    subgraph setup [Experimental Setup]
+        syntheticGenome[Synthetic Genome] --> applyLesions[Apply Lesions]
+    end
+    subgraph replication [Replication Process]
+        applyLesions --> repFork{Replication Fork}
+        repFork -->|activates| checkpoint[Checkpoint Signal]
+        repFork -->|triggers| genomicTrigger[Genomic Trigger]
+    end
+    subgraph outcomes [Outcomes]
+        checkpoint --> forkStable([Fork Stabilization])
+        genomicTrigger -->|leads to| collapse([Collapse Failure])
+    end`
+
+  const userPrompt = `Generate a Mermaid diagram for the following research hypothesis:
+
+${contextBlock}
+
+Output only the Mermaid diagram code. Choose the diagram type that best communicates the key entities, relationships, mechanisms, or experimental steps.`
+
+  let mermaid: string
   try {
     const completion = await doClient.chat.completions.create({
-      model: CODE_MODEL,
+      model: REASONING_MODEL,
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: userPrompt },
       ],
-      max_tokens: 2048,
-      temperature: 0.7,
+      max_tokens: 1200,
+      temperature: 0.3,
     })
 
     const raw = completion.choices[0]?.message?.content?.trim() ?? ""
 
-    // Extract SVG content (strip any accidental markdown fences)
-    const svgMatch = raw.match(/<svg[\s\S]*<\/svg>/i)
-    svg = svgMatch ? svgMatch[0] : raw
+    // Strip any accidental markdown fences the model might wrap around it
+    mermaid = raw
+      .replace(/^```(?:mermaid)?\s*/i, "")
+      .replace(/\s*```$/i, "")
+      .trim()
 
-    if (!svg.startsWith("<svg")) {
-      return NextResponse.json({ error: "LLM did not return valid SVG" }, { status: 502 })
+    if (!mermaid) {
+      return NextResponse.json({ error: "LLM did not return Mermaid content" }, { status: 502 })
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
@@ -78,7 +112,7 @@ Generate an SVG diagram that visually represents this research hypothesis.`
     )
   }
 
-  await updateHypothesis(hypothesisId, { visualization_svg: svg } as Parameters<typeof updateHypothesis>[1])
+  await updateHypothesis(hypothesisId, { visualization_mermaid: mermaid } as Parameters<typeof updateHypothesis>[1])
 
-  return NextResponse.json({ svg })
+  return NextResponse.json({ mermaid })
 }

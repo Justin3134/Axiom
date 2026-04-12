@@ -108,6 +108,7 @@ export interface Hypothesis {
   failure_reason: string | null
   conclusion: string | null
   visualization_svg: string | null
+  visualization_mermaid: string | null
   created_at: string
   updated_at: string
   // Relations
@@ -146,6 +147,8 @@ export interface Briefing {
   methodology: string
   discussion: string
   conclusion: string
+  limitations: string
+  keywords: string[]
   key_findings: BriefingFinding[]
   dead_ends: string[]
   breakthrough_alert: { title: string; description: string } | null

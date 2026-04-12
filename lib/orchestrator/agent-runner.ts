@@ -5,6 +5,7 @@ import {
   executeExperiment,
   saveFindingsToSandbox,
   loadPreviousFindings,
+  loadSiblingFindings,
   getSandboxName,
 } from "@/lib/blaxel/sandbox"
 import { writeExperimentCode } from "@/lib/ai/experiment-writer"
@@ -34,7 +35,7 @@ export async function runAgent(
     // ── STEP 2: Get or create Blaxel sandbox ─────────────────────
     await log(hid, program.id, "thought", "Acquiring persistent sandbox environment...")
 
-    const sandbox = await getOrCreateSandbox(hid)
+    const sandbox = await getOrCreateSandbox(hid, program.id)
     const sandboxName = getSandboxName(hid)
 
     await updateHypothesis(hid, {
@@ -69,6 +70,17 @@ export async function runAgent(
         program.id,
         "thought",
         `📂 Resuming: found ${previousFindings.length} previous findings from last session`
+      )
+    }
+
+    // ── STEP 4b: Load sibling findings from shared drive ─────────
+    const siblingFindings = await loadSiblingFindings(sandbox, hid)
+    if (siblingFindings.length > 0) {
+      await log(
+        hid,
+        program.id,
+        "thought",
+        `🔗 Loaded findings from ${siblingFindings.length} sibling agent(s) via shared drive`
       )
     }
 
@@ -107,7 +119,7 @@ export async function runAgent(
     // ── STEP 6: Write experiment code (GPT-4o) ────────────────────
     await log(hid, program.id, "thought", "Writing experiment code...")
 
-    const code = await writeExperimentCode({
+    let code = await writeExperimentCode({
       hypothesis: hypothesis.description,
       approach: hypothesis.approach,
       domain: program.domain,
@@ -116,13 +128,61 @@ export async function runAgent(
         ? (previousFindings as string[])
         : [],
       searchContext,
+      siblingFindings,
     })
 
     await updateHypothesis(hid, { experiment_code: code })
     await log(hid, program.id, "code", code)
 
     // ── STEP 7: Write script to sandbox filesystem ────────────────
-    const scriptPath = await writeExperimentScript(sandbox, code, hid)
+    let scriptPath = await writeExperimentScript(sandbox, code, hid)
+
+    // ── STEP 7.5: Validate syntax — retry up to 2x if broken ─────
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const check = await sandbox.process.exec({
+        command: `python3 -m py_compile ${scriptPath} 2>&1 && echo __SYNTAX_OK__`,
+        waitForCompletion: true,
+        timeout: 15,
+      })
+      const checkOut = ((check as { stdout?: string }).stdout || "").trim()
+      if (checkOut.includes("__SYNTAX_OK__")) break
+
+      // Syntax error — regenerate with feedback
+      const syntaxFeedback = checkOut || "Unknown syntax error"
+      await log(
+        hid,
+        program.id,
+        "thought",
+        `Syntax error in generated code (attempt ${attempt + 1}/2), regenerating…\n${syntaxFeedback}`
+      )
+
+      code = await writeExperimentCode({
+        hypothesis: hypothesis.description,
+        approach: hypothesis.approach,
+        domain: program.domain,
+        masterContext: program.master_context?.summary ?? "",
+        previousFindings: Array.isArray(previousFindings) ? (previousFindings as string[]) : [],
+        searchContext,
+        syntaxFeedback,
+      })
+      await updateHypothesis(hid, { experiment_code: code })
+      await log(hid, program.id, "code", code)
+      scriptPath = await writeExperimentScript(sandbox, code, hid)
+
+      // On the last retry, do a final check and hard-fail if still broken
+      if (attempt === 1) {
+        const finalCheck = await sandbox.process.exec({
+          command: `python3 -m py_compile ${scriptPath} 2>&1 && echo __SYNTAX_OK__`,
+          waitForCompletion: true,
+          timeout: 15,
+        })
+        const finalOut = ((finalCheck as { stdout?: string }).stdout || "").trim()
+        if (!finalOut.includes("__SYNTAX_OK__")) {
+          throw new Error(`Generated code has unresolvable syntax errors after 2 retries: ${finalOut}`)
+        }
+      }
+    }
+
     await log(
       hid,
       program.id,
@@ -165,7 +225,7 @@ export async function runAgent(
     }
 
     // ── STEP 10: Save findings to sandbox (they persist!) ────────
-    await saveFindingsToSandbox(sandbox, analysis.findings)
+    await saveFindingsToSandbox(sandbox, analysis.findings, hid)
 
     // ── STEP 11: Update hypothesis with results ───────────────────
     const newStatus =

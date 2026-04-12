@@ -32,11 +32,15 @@ function tabsEqual(a: Tab, b: Tab): boolean {
 }
 
 const ACCENT_COLORS = [
-  "#3b82f6", // blue
-  "#22c55e", // green
-  "#eab308", // yellow
-  "#ef4444", // red
+  "#3b82f6", "#22c55e", "#eab308", "#ef4444", "#a855f7",
+  "#f97316", "#06b6d4", "#ec4899", "#84cc16", "#14b8a6",
 ]
+
+function getRootAncestorId(h: import("@/lib/types").Hypothesis, all: import("@/lib/types").Hypothesis[]): string {
+  if (!h.parent_id) return h.id
+  const parent = all.find((x) => x.id === h.parent_id)
+  return parent ? getRootAncestorId(parent, all) : h.id
+}
 
 const PROGRAM_STATUS_CFG: Record<string, { color: string; label: string }> = {
   initializing: { color: "#52525b", label: "Initializing" },
@@ -205,22 +209,28 @@ export default function ProgramPage({
     return h ? (h.title.length > 22 ? h.title.slice(0, 22) + "…" : h.title) : "Approach"
   }
 
-  const sortedHypotheses = [...hypotheses].sort(
-    (a, b) => (b.plausibility_score ?? 0) - (a.plausibility_score ?? 0)
-  )
+  const sortedRoots = [...hypotheses]
+    .filter((h) => !h.parent_id)
+    .sort((a, b) => (b.plausibility_score ?? 0) - (a.plausibility_score ?? 0))
+
+  function rootColorIndex(hypothesisId: string): number {
+    const h = hypotheses.find((x) => x.id === hypothesisId)
+    if (!h) return 0
+    const rootId = getRootAncestorId(h, hypotheses)
+    const idx = sortedRoots.findIndex((r) => r.id === rootId)
+    return idx === -1 ? 0 : idx
+  }
 
   function getTabAccent(tab: Tab): string | null {
     if (tab.kind !== "hypothesis") return null
-    const idx = sortedHypotheses.findIndex((x) => x.id === tab.hypothesisId)
-    if (idx === -1) return null
-    return ACCENT_COLORS[idx % ACCENT_COLORS.length]
+    return ACCENT_COLORS[rootColorIndex(tab.hypothesisId) % ACCENT_COLORS.length]
   }
 
   function getHypothesisForTab(tab: Tab): { hyp: Hypothesis; idx: number } | null {
     if (tab.kind !== "hypothesis") return null
-    const idx = sortedHypotheses.findIndex((x) => x.id === tab.hypothesisId)
-    if (idx === -1) return null
-    return { hyp: sortedHypotheses[idx], idx }
+    const h = hypotheses.find((x) => x.id === tab.hypothesisId)
+    if (!h) return null
+    return { hyp: h, idx: rootColorIndex(tab.hypothesisId) }
   }
 
   const activeTabAccent = getTabAccent(activeTab)
@@ -529,6 +539,7 @@ export default function ProgramPage({
               program={program}
               briefing={latestBriefing}
               hypotheses={hypotheses}
+              onHypothesisClick={openHypothesisTab}
             />
           </div>
         )}

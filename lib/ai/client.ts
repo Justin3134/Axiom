@@ -1,11 +1,16 @@
 import OpenAI from "openai"
 
-// Single OpenAI-compatible client pointed at DigitalOcean Serverless Inference
+// OpenAI-compatible client pointed at Blaxel sandbox-openai model endpoint.
+// The BL_API_KEY is passed as the standard Authorization header (apiKey field).
+// Sending a separate X-Blaxel-Authorization header alongside Authorization
+// causes Blaxel to reject with 401 — the Authorization header takes precedence.
 export const doClient = new OpenAI({
-  apiKey: process.env.DO_API_KEY!,
-  baseURL: "https://inference.do-ai.run/v1",
+  apiKey: process.env.BL_API_KEY,
+  baseURL: "https://run.blaxel.ai/axiom/models/sandbox-openai/v1",
+  defaultHeaders: {
+    "X-Blaxel-Workspace": process.env.BL_WORKSPACE ?? "axiom",
+  },
 })
 
-// Models — DO-hosted, billed directly by DigitalOcean (no BYO key required)
-export const REASONING_MODEL = "openai-gpt-oss-120b"
-export const CODE_MODEL = "openai-gpt-oss-20b"
+export const REASONING_MODEL = "gpt-4o"
+export const CODE_MODEL = "gpt-4o-mini"

@@ -1,11 +1,18 @@
 "use client"
 
 import { useRef, useEffect, useState, useCallback } from "react"
+import dynamic from "next/dynamic"
 import type { Hypothesis, AgentLog, LogType, FindingType } from "@/lib/types"
 import { useAgentStream } from "@/hooks/useAgentStream"
+import { isExecutionFailure } from "@/lib/utils"
+
+const MermaidDiagram = dynamic(() => import("@/components/diagram/MermaidDiagram"), { ssr: false })
 
 // ── Accent colors ──────────────────────────────────────────────
-const ACCENT_COLORS = ["#3b82f6", "#22c55e", "#eab308", "#ef4444"]
+const ACCENT_COLORS = [
+  "#3b82f6", "#22c55e", "#eab308", "#ef4444", "#a855f7",
+  "#f97316", "#06b6d4", "#ec4899", "#84cc16", "#14b8a6",
+]
 const accentFor = (i: number) => ACCENT_COLORS[i % ACCENT_COLORS.length]
 
 // ── Status config ──────────────────────────────────────────────
@@ -222,6 +229,8 @@ function makeSvgResponsive(svg: string): string {
 // ── SVG visualization block ────────────────────────────────────
 function VisualizationBlock({ hypothesis, accent }: { hypothesis: Hypothesis; accent: string }) {
   const [generating, setGenerating] = useState(false)
+  // Prefer Mermaid; fall back to legacy SVG for existing records
+  const [mermaidCode, setMermaidCode] = useState<string | null>(hypothesis.visualization_mermaid ?? null)
   const [svg, setSvg] = useState<string | null>(hypothesis.visualization_svg ?? null)
   const [err, setErr] = useState(false)
 
@@ -232,7 +241,8 @@ function VisualizationBlock({ hypothesis, accent }: { hypothesis: Hypothesis; ac
       const res = await fetch(`/api/hypotheses/${hypothesis.id}/visualization`, { method: "POST" })
       if (res.ok) {
         const data = await res.json()
-        setSvg(data.svg)
+        if (data.mermaid) setMermaidCode(data.mermaid)
+        else if (data.svg) setSvg(data.svg)
       } else {
         setErr(true)
       }
@@ -243,24 +253,29 @@ function VisualizationBlock({ hypothesis, accent }: { hypothesis: Hypothesis; ac
     }
   }, [hypothesis.id])
 
-  const containerStyle: React.CSSProperties = {
+  const wrapperStyle: React.CSSProperties = {
     width: "100%",
-    height: 380,
     borderRadius: 10,
     border: `1px solid ${accent}33`,
-    background: "#080809",
     overflow: "hidden",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
     boxShadow: `0 0 32px ${accent}0d`,
     marginTop: 16,
   }
 
+  // Mermaid diagram (new path)
+  if (mermaidCode) {
+    return (
+      <div style={wrapperStyle}>
+        <MermaidDiagram code={mermaidCode} />
+      </div>
+    )
+  }
+
+  // Legacy SVG fallback
   if (svg) {
     return (
       <div
-        style={containerStyle}
+        style={{ ...wrapperStyle, background: "#080809", height: 380, display: "flex", alignItems: "center", justifyContent: "center" }}
         dangerouslySetInnerHTML={{ __html: makeSvgResponsive(svg) }}
       />
     )
@@ -271,7 +286,11 @@ function VisualizationBlock({ hypothesis, accent }: { hypothesis: Hypothesis; ac
       onClick={generate}
       disabled={generating}
       style={{
-        ...containerStyle,
+        ...wrapperStyle,
+        height: 200,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
         border: `1px dashed ${err ? "#ef444444" : accent + "2a"}`,
         background: "transparent",
         color: err ? "#ef444466" : accent + "55",
@@ -357,6 +376,141 @@ function JournalLine({ log }: { log: AgentLog }) {
   )
 }
 
+// ── Sources tab ────────────────────────────────────────────────
+function SourcesTab({ webSources, citations, accent }: {
+  webSources: WebSource[]
+  citations: string[]
+  accent: string
+}) {
+  const allEmpty = webSources.length === 0 && citations.length === 0
+
+  if (allEmpty) {
+    return (
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: 260, gap: 10 }}>
+        <span style={{ fontSize: 24, opacity: 0.15 }}>⊘</span>
+        <span style={{ fontSize: 11, color: "#3f3f46", letterSpacing: "0.06em" }}>No sources visited yet</span>
+      </div>
+    )
+  }
+
+  return (
+    <div style={{ padding: "18px 24px 60px" }}>
+      {webSources.length > 0 && (
+        <div style={{ marginBottom: 24 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
+            <span style={{ fontSize: 9, letterSpacing: "0.12em", textTransform: "uppercase", color: "#52525b", fontWeight: 600 }}>
+              Web Sources
+            </span>
+            <span style={{ fontSize: 9, color: "#3b82f666", background: "#3b82f610", padding: "2px 7px", borderRadius: 4 }}>
+              {webSources.length} · via Tavily
+            </span>
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+            {webSources.map((src, i) => {
+              let domain = ""
+              try { domain = new URL(src.url).hostname.replace(/^www\./, "") } catch { domain = src.url }
+              const relevance = src.score != null ? Math.round(src.score * 100) : null
+              return (
+                <a
+                  key={i}
+                  href={src.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{
+                    display: "block",
+                    padding: "10px 14px",
+                    borderRadius: 8,
+                    background: "#0a0a0c",
+                    border: "1px solid #1a1a1e",
+                    textDecoration: "none",
+                    transition: "border-color 0.12s, background 0.12s",
+                  }}
+                  onMouseEnter={(e) => {
+                    const el = e.currentTarget
+                    el.style.borderColor = accent + "44"
+                    el.style.background = "#0e0e12"
+                  }}
+                  onMouseLeave={(e) => {
+                    const el = e.currentTarget
+                    el.style.borderColor = "#1a1a1e"
+                    el.style.background = "#0a0a0c"
+                  }}
+                >
+                  <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10, marginBottom: src.snippet ? 5 : 4 }}>
+                    <div style={{ display: "flex", alignItems: "flex-start", gap: 8, flex: 1, minWidth: 0 }}>
+                      <img
+                        src={`https://www.google.com/s2/favicons?domain=${domain}&sz=32`}
+                        alt=""
+                        width={16}
+                        height={16}
+                        style={{ borderRadius: 3, flexShrink: 0, marginTop: 1, opacity: 0.85 }}
+                        onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none" }}
+                      />
+                      <span style={{ fontSize: 12, color: "#c4c4c8", lineHeight: 1.4, fontWeight: 500, flex: 1, minWidth: 0 }}>
+                        {src.title}
+                      </span>
+                    </div>
+                    {relevance != null && (
+                      <span style={{ fontSize: 9, color: "#3b82f6", flexShrink: 0, fontVariantNumeric: "tabular-nums", background: "#3b82f610", padding: "2px 6px", borderRadius: 4 }}>
+                        {relevance}%
+                      </span>
+                    )}
+                  </div>
+                  {src.snippet && (
+                    <p style={{
+                      fontSize: 10,
+                      color: "#52525b",
+                      lineHeight: 1.55,
+                      margin: "0 0 6px",
+                      display: "-webkit-box",
+                      WebkitLineClamp: 2,
+                      WebkitBoxOrient: "vertical" as const,
+                      overflow: "hidden",
+                    }}>
+                      {src.snippet}
+                    </p>
+                  )}
+                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <span style={{ fontSize: 9, color: "#3b82f666" }}>↗</span>
+                    <span style={{ fontSize: 9, color: "#3b82f666" }}>{domain}</span>
+                  </div>
+                </a>
+              )
+            })}
+          </div>
+        </div>
+      )}
+
+      {citations.length > 0 && (
+        <div>
+          <div style={{ fontSize: 9, letterSpacing: "0.12em", textTransform: "uppercase", color: "#52525b", fontWeight: 600, marginBottom: 12 }}>
+            Citations · {citations.length}
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {citations.map((c, i) => {
+              const isUrl = c.startsWith("http")
+              return (
+                <div key={i} style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "8px 12px", borderRadius: 7, background: "#0a0a0c", border: "1px solid #1a1a1e" }}>
+                  <span style={{ fontSize: 9, color: "#3f3f46", marginTop: 2, flexShrink: 0, fontVariantNumeric: "tabular-nums" }}>[{i + 1}]</span>
+                  {isUrl ? (
+                    <a href={c} target="_blank" rel="noopener noreferrer"
+                      style={{ fontSize: 11, color: "#3b82f6", textDecoration: "none", lineHeight: 1.5, wordBreak: "break-all" }}
+                      onMouseEnter={e => { (e.currentTarget as HTMLAnchorElement).style.textDecoration = "underline" }}
+                      onMouseLeave={e => { (e.currentTarget as HTMLAnchorElement).style.textDecoration = "none" }}
+                    >{c}</a>
+                  ) : (
+                    <span style={{ fontSize: 11, color: "#a1a1aa", lineHeight: 1.5 }}>{c}</span>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── Main component ─────────────────────────────────────────────
 interface HypothesisDetailPanelProps {
   hypothesis: Hypothesis
@@ -376,6 +530,10 @@ export default function HypothesisDetailPanel({
   const isSucceeded = h.status === "succeeded"
   const isFailed = h.status === "failed"
 
+  const [innerTab, setInnerTab] = useState<"overview" | "sources">("overview")
+  const [retrying, setRetrying] = useState(false)
+  const [retryError, setRetryError] = useState<string | null>(null)
+
   const { logs, connected } = useAgentStream(programId, h.id)
   const journalBottomRef = useRef<HTMLDivElement>(null)
 
@@ -385,11 +543,94 @@ export default function HypothesisDetailPanel({
 
   const webSources = extractWebSources(logs)
   const citations = extractCitations(logs)
+  const totalSources = webSources.length + citations.length
   const displayConclusion = h.conclusion || h.raw_output || ""
   const conclusionAccent = isSucceeded ? "#22c55e" : isFailed ? "#ef4444" : accent
 
+  const isExecFailure = isFailed && isExecutionFailure(h.failure_reason, h.raw_output)
+
+  const handleRetry = useCallback(async () => {
+    setRetrying(true)
+    setRetryError(null)
+    try {
+      const res = await fetch(`/api/hypotheses/${h.id}/retry`, { method: "POST" })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        setRetryError((data as { error?: string }).error ?? "Retry failed")
+      }
+    } catch {
+      setRetryError("Network error — please try again")
+    } finally {
+      setRetrying(false)
+    }
+  }, [h.id])
+
   return (
-    <div style={{ height: "100%", overflowY: "auto", background: "var(--bg-base)" }}>
+    <div style={{ height: "100%", display: "flex", flexDirection: "column", background: "var(--bg-base)" }}>
+
+      {/* ── Inner tab bar ──────────────────────────────────────── */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "flex-end",
+          gap: 2,
+          padding: "0 24px",
+          borderBottom: "1px solid #1a1a1e",
+          flexShrink: 0,
+          background: "var(--bg-base)",
+        }}
+      >
+        {(["overview", "sources"] as const).map((tab) => {
+          const isActive = innerTab === tab
+          const label = tab === "overview" ? "Overview" : `Sources${totalSources > 0 ? ` · ${totalSources}` : ""}`
+          return (
+            <button
+              key={tab}
+              onClick={() => setInnerTab(tab)}
+              style={{
+                padding: "8px 14px 7px",
+                background: "none",
+                border: "none",
+                borderBottom: isActive ? `2px solid ${accent}` : "2px solid transparent",
+                cursor: "pointer",
+                fontSize: 11,
+                fontWeight: isActive ? 600 : 400,
+                color: isActive ? "var(--text-primary)" : "var(--text-muted)",
+                fontFamily: "inherit",
+                letterSpacing: "0.02em",
+                transition: "color 0.12s",
+                marginBottom: -1,
+              }}
+              onMouseEnter={(e) => {
+                if (!isActive) (e.currentTarget as HTMLButtonElement).style.color = "var(--text-secondary)"
+              }}
+              onMouseLeave={(e) => {
+                if (!isActive) (e.currentTarget as HTMLButtonElement).style.color = "var(--text-muted)"
+              }}
+            >
+              {tab === "sources" && totalSources > 0 && (
+                <span style={{
+                  display: "inline-block",
+                  width: 5,
+                  height: 5,
+                  borderRadius: "50%",
+                  background: isActive ? accent : "#52525b",
+                  marginRight: 6,
+                  verticalAlign: "middle",
+                  marginBottom: 1,
+                }} />
+              )}
+              {label}
+            </button>
+          )
+        })}
+      </div>
+
+      {/* ── Tab content ────────────────────────────────────────── */}
+      <div style={{ flex: 1, overflowY: "auto" }}>
+        {innerTab === "sources" ? (
+          <SourcesTab webSources={webSources} citations={citations} accent={accent} />
+        ) : (
       <div style={{ maxWidth: 860, margin: "0 auto", padding: "22px 24px 60px" }}>
 
         {/* ── Header card ─────────────────────────────────────── */}
@@ -449,6 +690,80 @@ export default function HypothesisDetailPanel({
           </div>
         </div>
 
+        {/* ── Execution failure banner ─────────────────────────── */}
+        {isExecFailure && (
+          <div
+            style={{
+              borderRadius: 9,
+              border: "1px solid rgba(234,179,8,0.25)",
+              background: "rgba(234,179,8,0.06)",
+              padding: "12px 16px",
+              marginBottom: 10,
+              display: "flex",
+              alignItems: "flex-start",
+              gap: 12,
+            }}
+          >
+            <span style={{ fontSize: 16, lineHeight: 1, flexShrink: 0, marginTop: 1 }}>⚠</span>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.08em", color: "#eab308", marginBottom: 4 }}>
+                EXECUTION ERROR — NOT A SCIENTIFIC RESULT
+              </div>
+              <p style={{ fontSize: 11, color: "#a1a1aa", lineHeight: 1.55, margin: "0 0 10px" }}>
+                This hypothesis failed due to a coding or environment error, not because the science was negative.
+                You can retry it and the agent will attempt to fix and re-run the experiment.
+              </p>
+              {h.failure_reason && (
+                <pre style={{
+                  fontSize: 9, color: "#ef444499", background: "#0e0e10",
+                  border: "1px solid #27272a", borderRadius: 6,
+                  padding: "7px 10px", margin: "0 0 10px",
+                  whiteSpace: "pre-wrap", wordBreak: "break-all",
+                  maxHeight: 80, overflowY: "auto",
+                }}>
+                  {h.failure_reason}
+                </pre>
+              )}
+              <button
+                onClick={handleRetry}
+                disabled={retrying}
+                style={{
+                  padding: "6px 16px",
+                  background: retrying ? "rgba(234,179,8,0.06)" : "rgba(234,179,8,0.12)",
+                  border: "1px solid rgba(234,179,8,0.3)",
+                  borderRadius: 6,
+                  color: retrying ? "#71717a" : "#eab308",
+                  fontSize: 11,
+                  fontWeight: 600,
+                  cursor: retrying ? "default" : "pointer",
+                  fontFamily: "inherit",
+                  letterSpacing: "0.04em",
+                  transition: "all 0.12s",
+                }}
+                onMouseEnter={(e) => {
+                  if (!retrying) {
+                    const el = e.currentTarget as HTMLButtonElement
+                    el.style.background = "rgba(234,179,8,0.2)"
+                    el.style.borderColor = "rgba(234,179,8,0.5)"
+                  }
+                }}
+                onMouseLeave={(e) => {
+                  if (!retrying) {
+                    const el = e.currentTarget as HTMLButtonElement
+                    el.style.background = "rgba(234,179,8,0.12)"
+                    el.style.borderColor = "rgba(234,179,8,0.3)"
+                  }
+                }}
+              >
+                {retrying ? "Requeueing…" : "↺ Retry Experiment"}
+              </button>
+              {retryError && (
+                <span style={{ fontSize: 10, color: "#ef4444", marginLeft: 10 }}>{retryError}</span>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* ── Research Timeline ────────────────────────────────── */}
         <ResearchTimeline logs={logs} status={h.status} accent={accent} isRunning={isRunning} />
 
@@ -495,9 +810,19 @@ export default function HypothesisDetailPanel({
                     }}
                   >
                     <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10, marginBottom: src.snippet ? 5 : 0 }}>
-                      <span style={{ fontSize: 11, color: "#c4c4c8", lineHeight: 1.4, fontWeight: 500, flex: 1, minWidth: 0 }}>
-                        {src.title}
-                      </span>
+                      <div style={{ display: "flex", alignItems: "flex-start", gap: 7, flex: 1, minWidth: 0 }}>
+                        <img
+                          src={`https://www.google.com/s2/favicons?domain=${domain}&sz=32`}
+                          alt=""
+                          width={14}
+                          height={14}
+                          style={{ borderRadius: 3, flexShrink: 0, marginTop: 1, opacity: 0.85 }}
+                          onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none" }}
+                        />
+                        <span style={{ fontSize: 11, color: "#c4c4c8", lineHeight: 1.4, fontWeight: 500, flex: 1, minWidth: 0 }}>
+                          {src.title}
+                        </span>
+                      </div>
                       {relevance != null && (
                         <span style={{ fontSize: 9, color: "#3b82f6", flexShrink: 0, fontVariantNumeric: "tabular-nums", background: "#3b82f610", padding: "2px 6px", borderRadius: 4 }}>
                           {relevance}%
@@ -635,29 +960,7 @@ export default function HypothesisDetailPanel({
           </div>
         </Section>
 
-        {/* ── Sources & Citations ───────────────────────────────── */}
-        {citations.length > 0 && (
-          <Section label={`Sources & Citations · ${citations.length}`}>
-            <div style={{ display: "flex", flexDirection: "column", gap: 6, paddingTop: 10 }}>
-              {citations.map((c, i) => {
-                const isUrl = c.startsWith("http")
-                return (
-                  <div key={i} style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
-                    <span style={{ fontSize: 9, color: "#3f3f46", marginTop: 3, flexShrink: 0 }}>[{i + 1}]</span>
-                    {isUrl ? (
-                      <a href={c} target="_blank" rel="noopener noreferrer"
-                        style={{ fontSize: 11, color: "#3b82f6", textDecoration: "none", lineHeight: 1.5, wordBreak: "break-all" }}
-                        onMouseEnter={e => { ;(e.currentTarget as HTMLAnchorElement).style.textDecoration = "underline" }}
-                        onMouseLeave={e => { ;(e.currentTarget as HTMLAnchorElement).style.textDecoration = "none" }}
-                      >{c}</a>
-                    ) : (
-                      <span style={{ fontSize: 11, color: "#a1a1aa", lineHeight: 1.5 }}>{c}</span>
-                    )}
-                  </div>
-                )
-              })}
-            </div>
-          </Section>
+      </div>
         )}
       </div>
     </div>

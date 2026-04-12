@@ -16,6 +16,48 @@ const DOMAIN_CONTEXT: Record<Domain, string> = {
     "quantum mechanics, condensed matter, particle interactions, field theories, statistical mechanics",
 }
 
+/** Extract and parse a JSON array from raw model output, stripping markdown fences. */
+function extractJsonArray(text: string): unknown[] {
+  // Strip markdown code fences
+  let cleaned = text.replace(/```(?:json)?\n?/g, "").trim()
+
+  // Find the first '[' and last ']' to isolate the array
+  const start = cleaned.indexOf("[")
+  const end = cleaned.lastIndexOf("]")
+  if (start !== -1 && end !== -1 && end > start) {
+    cleaned = cleaned.slice(start, end + 1)
+  }
+
+  return JSON.parse(cleaned)
+}
+
+/** Call the model and parse a JSON array response, retrying once on parse failure. */
+async function callForJsonArray(
+  prompt: string,
+  maxTokens: number,
+  retries = 1,
+): Promise<unknown[]> {
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    const response = await doClient.chat.completions.create({
+      model: REASONING_MODEL,
+      max_tokens: maxTokens,
+      messages: [{ role: "user", content: prompt }],
+    })
+
+    const text = response.choices[0].message.content ?? "[]"
+    try {
+      return extractJsonArray(text)
+    } catch (err) {
+      if (attempt < retries) {
+        console.warn(`[hypothesis-generator] JSON parse failed (attempt ${attempt + 1}), retrying…`, err)
+        continue
+      }
+      throw new Error(`Model returned invalid JSON after ${retries + 1} attempts: ${(err as Error).message}`)
+    }
+  }
+  return []
+}
+
 // Generate root hypotheses for a new research program
 export async function generateRootHypotheses(params: {
   researchQuestion: string
@@ -35,7 +77,7 @@ Each hypothesis must:
 3. Be genuinely different from the others (diverse approaches, not variations of one idea)
 4. Have a realistic plausibility based on current scientific knowledge
 
-Return ONLY a valid JSON array. No markdown. No explanation. Just the array.
+Return ONLY a valid JSON array. No markdown, no prose. Start your response with [ and end with ].
 
 Schema:
 [{
@@ -43,43 +85,30 @@ Schema:
   "description": "2-3 sentences describing the hypothesis scientifically",
   "rationale": "Why this approach might work, grounded in existing science",
   "approach": "Specific computational experiment to test this via Python",
-  "plausibilityScore": 0.0-1.0,
-  "priorityRank": 1-${count}
+  "plausibilityScore": 0.75,
+  "priorityRank": 1
 }]`
 
-  const response = await doClient.chat.completions.create({
-    model: REASONING_MODEL,
-    max_tokens: 6000,
-    messages: [{ role: "user", content: prompt }],
-  })
+  const parsed = await callForJsonArray(prompt, 8000)
 
-  const text = response.choices[0].message.content || "[]"
-  const cleaned = text.replace(/```json\n?|```\n?/g, "").trim()
-  const parsed = JSON.parse(cleaned)
-
-  return parsed.map(
-    (
-      h: {
-        title: string
-        description: string
-        rationale: string
-        approach: string
-        plausibilityScore: number
-        priorityRank: number
-      },
-      i: number
-    ) => ({
-      title: h.title,
-      description: h.description,
-      rationale: h.rationale,
-      approach: h.approach,
-      plausibility_score: h.plausibilityScore,
-      priority_rank: h.priorityRank ?? i + 1,
-      depth: 0,
-      generation: 0,
-      branch_path: [],
-    })
-  )
+  return (parsed as {
+    title: string
+    description: string
+    rationale: string
+    approach: string
+    plausibilityScore: number
+    priorityRank: number
+  }[]).map((h, i) => ({
+    title: h.title ?? `Hypothesis ${i + 1}`,
+    description: h.description ?? "",
+    rationale: h.rationale ?? "",
+    approach: h.approach ?? "",
+    plausibility_score: typeof h.plausibilityScore === "number" ? h.plausibilityScore : 0.5,
+    priority_rank: typeof h.priorityRank === "number" ? h.priorityRank : i + 1,
+    depth: 0,
+    generation: 0,
+    branch_path: [],
+  }))
 }
 
 // Generate child hypotheses drilling into a successful parent's findings
@@ -124,22 +153,14 @@ ${(masterContext || "").slice(0, 1000)}
 Generate exactly 3 child hypotheses that explore MORE SPECIFIC variants of what was found.
 These should drill deeper into the promising direction, not branch into unrelated areas.
 
-Return ONLY valid JSON array. No markdown:
+Return ONLY a valid JSON array. No markdown, no prose. Start with [ and end with ].
 [{
   "title": "Short descriptive name (5-8 words)",
   "description": "2-3 sentences — specific variant of parent",
   "rationale": "Why this follow-up is promising given parent findings",
   "approach": "More targeted Python experiment to test this",
-  "plausibility_score": 0.0-1.0
+  "plausibility_score": 0.75
 }]`
 
-  const response = await doClient.chat.completions.create({
-    model: REASONING_MODEL,
-    max_tokens: 3000,
-    messages: [{ role: "user", content: prompt }],
-  })
-
-  const text = response.choices[0].message.content || "[]"
-  const cleaned = text.replace(/```json\n?|```\n?/g, "").trim()
-  return JSON.parse(cleaned)
+  return callForJsonArray(prompt, 3000)
 }

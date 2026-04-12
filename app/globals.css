@@ -121,6 +121,11 @@ body {
 .react-flow__background { background: var(--bg-base) !important; }
 .react-flow__minimap { display: none; }
 
+/* Prevent global height:auto from propagating into SVG — SVG needs a numeric length */
+.react-flow svg,
+.react-flow__edges svg,
+.react-flow__container svg { height: 100%; }
+
 /* ─── Prose for briefings ─────────────────────────────────────── */
 .prose-dark h1, .prose-dark h2, .prose-dark h3 { color: var(--text-primary); }
 .prose-dark p, .prose-dark li { color: var(--text-secondary); }

@@ -1,15 +1,25 @@
-import { SandboxInstance } from "@blaxel/core"
-import type { Domain } from "@/lib/types"
+import { SandboxInstance, DriveInstance } from "@blaxel/core"
+import type { Domain, Finding } from "@/lib/types"
+
+export const DRIVE_MOUNT_PATH = "/mnt/axiom"
+const FINDINGS_INDEX_PATH = `${DRIVE_MOUNT_PATH}/findings/_index.json`
 
 // Sandbox names: lowercase alphanumeric + hyphens, max 63 chars
 export function getSandboxName(hypothesisId: string): string {
   return `axiom-${hypothesisId.replace(/-/g, "").slice(0, 20)}`
 }
 
+// Drive name scoped per research program
+export function getDriveName(programId: string): string {
+  return `axiom-${programId.replace(/-/g, "").slice(0, 20)}`
+}
+
 // Create a sandbox if it doesn't exist, or return the existing one.
-// Blaxel sandboxes persist state across pauses — this is the core feature.
+// Also creates the program-level shared drive and mounts it so all agents
+// in the same program share /mnt/axiom for cross-agent memory.
 export async function getOrCreateSandbox(
-  hypothesisId: string
+  hypothesisId: string,
+  programId: string
 ): Promise<InstanceType<typeof SandboxInstance>> {
   const name = getSandboxName(hypothesisId)
 
@@ -17,11 +27,24 @@ export async function getOrCreateSandbox(
     name,
     image: "blaxel/py-app:latest", // Python 3.12 pre-installed
     memory: 2048,
+    region: "us-was-1",
     labels: {
       project: "axiom",
       hypothesis_id: hypothesisId,
       purpose: "research-agent",
     },
+  })
+
+  // Ensure the program-level shared drive exists and is mounted
+  await DriveInstance.createIfNotExists({
+    name: getDriveName(programId),
+    region: "us-was-1",
+  })
+
+  await sandbox.drives.mount({
+    driveName: getDriveName(programId),
+    mountPath: DRIVE_MOUNT_PATH,
+    drivePath: "/",
   })
 
   return sandbox
@@ -115,18 +138,29 @@ export async function executeExperiment(
   }
 }
 
-// Save findings to the sandbox filesystem — they persist between runs
+// Save findings to both the shared drive (cross-agent) and local /tmp (own-session resume).
+// Also updates the shared index manifest so siblings can discover this agent's findings.
 export async function saveFindingsToSandbox(
   sandbox: InstanceType<typeof SandboxInstance>,
-  findings: unknown
+  findings: unknown,
+  hypothesisId: string
 ): Promise<void> {
+  const findingsJson = JSON.stringify(findings, null, 2)
+
+  // Write to shared drive — visible to all sibling agents immediately
   await sandbox.fs.write(
-    "/tmp/axiom_findings.json",
-    JSON.stringify(findings, null, 2)
+    `${DRIVE_MOUNT_PATH}/findings/${hypothesisId}.json`,
+    findingsJson
   )
+
+  // Update the shared index so siblings know this file exists
+  await updateFindingsIndex(sandbox, hypothesisId)
+
+  // Keep writing to /tmp as a fast local fallback for own-session resume
+  await sandbox.fs.write("/tmp/axiom_findings.json", findingsJson)
 }
 
-// Load previous findings from sandbox (persisted from last session)
+// Load previous findings from the sandbox's own /tmp (persisted from last session)
 export async function loadPreviousFindings(
   sandbox: InstanceType<typeof SandboxInstance>
 ): Promise<unknown[] | null> {
@@ -135,5 +169,64 @@ export async function loadPreviousFindings(
     return JSON.parse(content as string)
   } catch {
     return null // First run — no previous findings
+  }
+}
+
+// Load findings written by all other agents in the same program via the shared drive.
+// Returns a flat array of Finding objects from all sibling hypothesis runs.
+export async function loadSiblingFindings(
+  sandbox: InstanceType<typeof SandboxInstance>,
+  hypothesisId: string
+): Promise<Finding[]> {
+  let index: string[] = []
+
+  try {
+    const raw = await sandbox.fs.read(FINDINGS_INDEX_PATH)
+    index = JSON.parse(raw as string)
+  } catch {
+    return [] // Drive is empty — no siblings have finished yet
+  }
+
+  const siblingIds = index.filter((id) => id !== hypothesisId)
+  if (siblingIds.length === 0) return []
+
+  const allFindings: Finding[] = []
+
+  await Promise.allSettled(
+    siblingIds.map(async (sid) => {
+      try {
+        const raw = await sandbox.fs.read(`${DRIVE_MOUNT_PATH}/findings/${sid}.json`)
+        const parsed = JSON.parse(raw as string)
+        if (Array.isArray(parsed)) {
+          allFindings.push(...(parsed as Finding[]))
+        }
+      } catch {
+        // Sibling file may not exist yet or be malformed — skip silently
+      }
+    })
+  )
+
+  return allFindings
+}
+
+// Append this hypothesis ID to the shared findings index manifest.
+// Uses a read-modify-write pattern; concurrent writes are tolerated since
+// the drive supports RWX and worst case a write is retried on next save.
+async function updateFindingsIndex(
+  sandbox: InstanceType<typeof SandboxInstance>,
+  hypothesisId: string
+): Promise<void> {
+  let index: string[] = []
+
+  try {
+    const raw = await sandbox.fs.read(FINDINGS_INDEX_PATH)
+    index = JSON.parse(raw as string)
+  } catch {
+    index = []
+  }
+
+  if (!index.includes(hypothesisId)) {
+    index.push(hypothesisId)
+    await sandbox.fs.write(FINDINGS_INDEX_PATH, JSON.stringify(index))
   }
 }

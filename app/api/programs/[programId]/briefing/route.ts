@@ -60,6 +60,8 @@ export async function POST(_req: NextRequest, { params }: Params) {
       methodology: paperSections.methodology,
       discussion: paperSections.discussion,
       conclusion: paperSections.conclusion,
+      limitations: paperSections.limitations,
+      keywords: paperSections.keywords,
       key_findings: keyFindings,
       dead_ends: deadEnds,
       breakthrough_alert: keyFindings.some((f) => f.significance === "breakthrough")

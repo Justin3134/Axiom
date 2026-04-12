@@ -1,19 +1,28 @@
 "use client"
 
 import { useState, useEffect, useRef, useCallback } from "react"
+import dynamic from "next/dynamic"
 import ReactMarkdown from "react-markdown"
 import type { Briefing, ResearchProgram, Hypothesis } from "@/lib/types"
+
+const MermaidDiagram = dynamic(() => import("@/components/diagram/MermaidDiagram"), { ssr: false })
 
 interface Props {
   program: ResearchProgram
   briefing: Briefing | null
   hypotheses: Hypothesis[]
+  onHypothesisClick?: (id: string) => void
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 function refId(index: number) {
   return `H-${String(index + 1).padStart(3, "0")}`
+}
+
+function truncate(str: string | undefined | null, max: number): string {
+  if (!str) return ""
+  return str.length > max ? str.slice(0, max) + "…" : str
 }
 
 const STATUS_STYLE: Record<string, { color: string; bg: string; border: string; label: string }> = {
@@ -67,14 +76,7 @@ const FINDING_COLOR: Record<string, string> = {
 function SectionDivider({ number, title, id }: { number?: string; title: string; id: string }) {
   return (
     <div id={id} style={{ marginBottom: 24, scrollMarginTop: 32 }}>
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 10,
-          marginBottom: 2,
-        }}
-      >
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 2 }}>
         {number && (
           <span
             style={{
@@ -99,18 +101,80 @@ function SectionDivider({ number, title, id }: { number?: string; title: string;
         >
           {title}
         </span>
-        <div
-          style={{
-            flex: 1,
-            height: 1,
-            background: "var(--border)",
-          }}
-        />
+        <div style={{ flex: 1, height: 1, background: "var(--border)" }} />
       </div>
     </div>
   )
 }
 
+// CitationProseBlock — renders markdown prose and converts [H-NNN] patterns
+// into clickable superscript citation badges that scroll to the References row.
+function CitationProseBlock({
+  text,
+  onCitationClick,
+}: {
+  text: string
+  onCitationClick?: (ref: string) => void
+}) {
+  if (!text) return null
+
+  // Pre-process the text into paragraphs, inject [H-NNN] as interactive badges.
+  const paragraphs = text.split(/\n\n+/)
+
+  return (
+    <div style={{ fontSize: 13, lineHeight: 1.85, color: "var(--text-secondary)" }}>
+      {paragraphs.map((para, pi) => {
+        if (!para.trim()) return null
+        const tokens = para.split(/(\[H-\d{3}\])/g)
+        return (
+          <p key={pi} style={{ margin: "0 0 16px", color: "var(--text-secondary)" }}>
+            {tokens.map((token, ti) => {
+              if (/^\[H-\d{3}\]$/.test(token)) {
+                const ref = token.slice(1, -1)
+                return (
+                  <sup
+                    key={ti}
+                    onClick={() => onCitationClick?.(ref)}
+                    title={`Jump to ${ref}`}
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      fontSize: 9,
+                      lineHeight: 1,
+                      color: "var(--stream-blue)",
+                      background: "rgba(59,130,246,0.1)",
+                      border: "1px solid rgba(59,130,246,0.25)",
+                      borderRadius: 3,
+                      padding: "1px 4px",
+                      margin: "0 1px",
+                      cursor: onCitationClick ? "pointer" : "default",
+                      verticalAlign: "super",
+                      fontVariantNumeric: "tabular-nums",
+                      transition: "background 0.1s",
+                      userSelect: "none",
+                    }}
+                    onMouseEnter={(e) => {
+                      if (onCitationClick) (e.currentTarget as HTMLElement).style.background = "rgba(59,130,246,0.2)"
+                    }}
+                    onMouseLeave={(e) => {
+                      (e.currentTarget as HTMLElement).style.background = "rgba(59,130,246,0.1)"
+                    }}
+                  >
+                    {ref}
+                  </sup>
+                )
+              }
+              return <span key={ti}>{token}</span>
+            })}
+          </p>
+        )
+      })}
+    </div>
+  )
+}
+
+// Legacy plain ProseBlock for places where we don't need citation rendering
 function ProseBlock({ text }: { text: string }) {
   if (!text) return null
   return (
@@ -119,21 +183,6 @@ function ProseBlock({ text }: { text: string }) {
         components={{
           p: ({ children }) => (
             <p style={{ margin: "0 0 14px", color: "var(--text-secondary)" }}>{children}</p>
-          ),
-          h1: ({ children }) => (
-            <h1 style={{ fontSize: 15, fontWeight: 600, color: "var(--text-primary)", margin: "20px 0 8px" }}>
-              {children}
-            </h1>
-          ),
-          h2: ({ children }) => (
-            <h2 style={{ fontSize: 13, fontWeight: 600, color: "var(--text-primary)", margin: "16px 0 6px" }}>
-              {children}
-            </h2>
-          ),
-          h3: ({ children }) => (
-            <h3 style={{ fontSize: 12, fontWeight: 600, color: "var(--text-primary)", margin: "12px 0 4px" }}>
-              {children}
-            </h3>
           ),
           strong: ({ children }) => (
             <strong style={{ color: "var(--text-primary)", fontWeight: 600 }}>{children}</strong>
@@ -155,9 +204,7 @@ function ProseBlock({ text }: { text: string }) {
           ul: ({ children }) => <ul style={{ paddingLeft: 20, margin: "8px 0 12px" }}>{children}</ul>,
           ol: ({ children }) => <ol style={{ paddingLeft: 20, margin: "8px 0 12px" }}>{children}</ol>,
           li: ({ children }) => (
-            <li style={{ color: "var(--text-secondary)", marginBottom: 5, lineHeight: 1.7 }}>
-              {children}
-            </li>
+            <li style={{ color: "var(--text-secondary)", marginBottom: 5, lineHeight: 1.7 }}>{children}</li>
           ),
         }}
       >
@@ -170,10 +217,12 @@ function ProseBlock({ text }: { text: string }) {
 function ExperimentCard({
   hypothesis,
   index,
+  figureNumber,
   defaultExpanded,
 }: {
   hypothesis: Hypothesis
   index: number
+  figureNumber: number | null
   defaultExpanded: boolean
 }) {
   const [expanded, setExpanded] = useState(defaultExpanded)
@@ -190,7 +239,6 @@ function ExperimentCard({
         overflow: "hidden",
       }}
     >
-      {/* Row header — always visible */}
       <button
         onClick={() => setExpanded((v) => !v)}
         style={{
@@ -242,9 +290,7 @@ function ExperimentCard({
         >
           {hypothesis.title}
         </span>
-        <span style={{ fontSize: 10, color: "var(--text-muted)", flexShrink: 0 }}>
-          Gen {hypothesis.generation}
-        </span>
+        <span style={{ fontSize: 10, color: "var(--text-muted)", flexShrink: 0 }}>Gen {hypothesis.generation}</span>
         <span
           style={{
             fontSize: 10,
@@ -261,13 +307,19 @@ function ExperimentCard({
         </span>
       </button>
 
-      {/* Expanded content */}
       {expanded && (
         <div style={{ padding: "0 14px 14px", display: "flex", flexDirection: "column", gap: 12 }}>
-          {/* Approach */}
           {hypothesis.approach && (
             <div>
-              <div style={{ fontSize: 9, color: "var(--text-muted)", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 4 }}>
+              <div
+                style={{
+                  fontSize: 9,
+                  color: "var(--text-muted)",
+                  letterSpacing: "0.1em",
+                  textTransform: "uppercase",
+                  marginBottom: 4,
+                }}
+              >
                 Approach
               </div>
               <p style={{ fontSize: 12, color: "var(--text-secondary)", lineHeight: 1.65, margin: 0 }}>
@@ -276,32 +328,36 @@ function ExperimentCard({
             </div>
           )}
 
-          {/* Findings */}
           {hypothesis.findings && hypothesis.findings.length > 0 && (
             <div>
-              <div style={{ fontSize: 9, color: "var(--text-muted)", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 6 }}>
+              <div
+                style={{
+                  fontSize: 9,
+                  color: "var(--text-muted)",
+                  letterSpacing: "0.1em",
+                  textTransform: "uppercase",
+                  marginBottom: 6,
+                }}
+              >
                 Findings
               </div>
               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                 {hypothesis.findings.map((f, fi) => (
-                  <div
-                    key={fi}
-                    style={{
-                      display: "flex",
-                      gap: 8,
-                      fontSize: 12,
-                      lineHeight: 1.6,
-                    }}
-                  >
-                    <span style={{ color: FINDING_COLOR[f.type] ?? "var(--text-muted)", flexShrink: 0, fontSize: 10, marginTop: 2 }}>
+                  <div key={fi} style={{ display: "flex", gap: 8, fontSize: 12, lineHeight: 1.6 }}>
+                    <span
+                      style={{
+                        color: FINDING_COLOR[f.type] ?? "var(--text-muted)",
+                        flexShrink: 0,
+                        fontSize: 10,
+                        marginTop: 2,
+                      }}
+                    >
                       ◆
                     </span>
                     <div style={{ flex: 1 }}>
                       <span style={{ color: "var(--text-secondary)" }}>{f.description}</span>
                       {f.implication && (
-                        <span style={{ color: "var(--text-muted)", marginLeft: 6 }}>
-                          → {f.implication}
-                        </span>
+                        <span style={{ color: "var(--text-muted)", marginLeft: 6 }}>→ {f.implication}</span>
                       )}
                     </div>
                     <span
@@ -321,19 +377,57 @@ function ExperimentCard({
             </div>
           )}
 
-          {/* Conclusion / failure reason */}
+          {/* Inline figure — kept in cards but figure gallery is the primary display */}
+          {(hypothesis.visualization_mermaid || hypothesis.visualization_svg) && figureNumber !== null && (
+            <div>
+              <div
+                style={{ borderRadius: 6, overflow: "hidden", border: "1px solid var(--border)" }}
+              >
+                {hypothesis.visualization_mermaid ? (
+                  <MermaidDiagram code={hypothesis.visualization_mermaid} />
+                ) : (
+                  <div
+                    style={{ background: "#080809", lineHeight: 0 }}
+                    dangerouslySetInnerHTML={{ __html: makeSvgResponsive(hypothesis.visualization_svg!) }}
+                  />
+                )}
+              </div>
+              <div
+                style={{
+                  fontSize: 9,
+                  color: "var(--text-muted)",
+                  letterSpacing: "0.06em",
+                  marginTop: 6,
+                  textAlign: "center",
+                  fontVariantNumeric: "tabular-nums",
+                }}
+              >
+                Figure {figureNumber}. {hypothesis.title}
+              </div>
+            </div>
+          )}
+
           {(hypothesis.conclusion || hypothesis.failure_reason) && (
             <div
               style={{
                 padding: "8px 12px",
                 borderRadius: 4,
-                background: hypothesis.status === "failed"
-                  ? "rgba(239,68,68,0.06)"
-                  : "rgba(34,197,94,0.05)",
-                border: `1px solid ${hypothesis.status === "failed" ? "rgba(239,68,68,0.15)" : "rgba(34,197,94,0.15)"}`,
+                background:
+                  hypothesis.status === "failed" ? "rgba(239,68,68,0.06)" : "rgba(34,197,94,0.05)",
+                border: `1px solid ${
+                  hypothesis.status === "failed" ? "rgba(239,68,68,0.15)" : "rgba(34,197,94,0.15)"
+                }`,
               }}
             >
-              <div style={{ fontSize: 9, color: "var(--text-muted)", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 4 }}>
+              <div
+                style={{
+                  fontSize: 9,
+                  color: "var(--text-muted)",
+                  letterSpacing: "0.1em",
+                  textTransform: "uppercase",
+                  marginBottom: 4,
+                }}
+              >
                 {hypothesis.status === "failed" ? "Failure Reason" : "Conclusion"}
               </div>
               <p style={{ fontSize: 12, color: "var(--text-secondary)", lineHeight: 1.65, margin: 0 }}>
@@ -347,6 +441,143 @@ function ExperimentCard({
   )
 }
 
+// ── Figure Gallery ─────────────────────────────────────────────────────────
+
+function FigureGallery({
+  hypotheses,
+  figureMap,
+  refMap,
+}: {
+  hypotheses: Hypothesis[]
+  figureMap: Map<string, number>
+  refMap: Map<string, number>
+}) {
+  const figureHypotheses = hypotheses.filter(
+    (h) => (h.visualization_mermaid || h.visualization_svg) && figureMap.has(h.id)
+  )
+  if (figureHypotheses.length === 0) return null
+
+  return (
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns: figureHypotheses.length === 1 ? "1fr" : "repeat(2, 1fr)",
+        gap: 20,
+      }}
+    >
+      {figureHypotheses.map((h) => {
+        const figNum = figureMap.get(h.id)!
+        const idx = refMap.get(h.id) ?? 0
+        const statusStyle = STATUS_STYLE[h.status] ?? STATUS_STYLE.queued
+
+        return (
+          <div
+            key={h.id}
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              border: "1px solid var(--border)",
+              borderRadius: 8,
+              overflow: "hidden",
+              background: "var(--bg-card)",
+            }}
+          >
+            {/* Diagram */}
+            <div style={{ background: "var(--bg-card)", minHeight: 180 }}>
+              {h.visualization_mermaid ? (
+                <MermaidDiagram code={h.visualization_mermaid} />
+              ) : (
+                <div
+                  style={{ background: "#080809", lineHeight: 0 }}
+                  dangerouslySetInnerHTML={{ __html: makeSvgResponsive(h.visualization_svg!) }}
+                />
+              )}
+            </div>
+
+            {/* Caption */}
+            <div
+              style={{
+                padding: "10px 14px 12px",
+                borderTop: "1px solid var(--border)",
+                background: "var(--bg-elevated)",
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "flex-start", gap: 8, marginBottom: 4 }}>
+                <span
+                  style={{
+                    fontSize: 10,
+                    fontWeight: 600,
+                    color: "var(--text-primary)",
+                    flexShrink: 0,
+                    fontVariantNumeric: "tabular-nums",
+                  }}
+                >
+                  Figure {figNum}.
+                </span>
+                <span style={{ fontSize: 11, color: "var(--text-primary)", lineHeight: 1.5, fontWeight: 500 }}>
+                  {h.title}
+                </span>
+              </div>
+              {h.approach && (
+                <p
+                  style={{
+                    fontSize: 11,
+                    color: "var(--text-muted)",
+                    lineHeight: 1.55,
+                    margin: "0 0 6px",
+                    fontStyle: "italic",
+                  }}
+                >
+                  {truncate(h.approach, 120)}
+                </p>
+              )}
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <span
+                  style={{
+                    fontSize: 9,
+                    color: "var(--text-muted)",
+                    background: "var(--bg-card)",
+                    border: "1px solid var(--border)",
+                    borderRadius: 3,
+                    padding: "1px 5px",
+                    fontVariantNumeric: "tabular-nums",
+                  }}
+                >
+                  [{refId(idx)}]
+                </span>
+                <span
+                  style={{
+                    fontSize: 9,
+                    color: statusStyle.color,
+                    border: `1px solid ${statusStyle.border}`,
+                    borderRadius: 3,
+                    padding: "1px 5px",
+                    letterSpacing: "0.06em",
+                  }}
+                >
+                  {statusStyle.label}
+                </span>
+                <span style={{ fontSize: 9, color: "var(--text-muted)", marginLeft: "auto" }}>
+                  {Math.round(h.plausibility_score * 100)}% plausibility
+                </span>
+              </div>
+            </div>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+// ── Make SVG fill its container ────────────────────────────────────────────
+
+function makeSvgResponsive(svg: string): string {
+  return svg
+    .replace(/(<svg[^>]*)\s+width="[^"]*"/, "$1")
+    .replace(/(<svg[^>]*)\s+height="[^"]*"/, "$1")
+    .replace("<svg", '<svg width="100%" height="auto"')
+}
+
 // ── TOC ────────────────────────────────────────────────────────────────────
 
 const TOC_ITEMS = [
@@ -354,10 +585,12 @@ const TOC_ITEMS = [
   { id: "introduction", label: "Introduction" },
   { id: "methodology", label: "Methodology" },
   { id: "results", label: "Results" },
+  { id: "figures", label: "Figures" },
   { id: "key-insights", label: "Key Insights" },
   { id: "discussion", label: "Discussion" },
   { id: "promising", label: "Directions" },
   { id: "eliminated", label: "Eliminated" },
+  { id: "limitations", label: "Limitations" },
   { id: "conclusion", label: "Conclusion" },
   { id: "next-steps", label: "Next Steps" },
   { id: "references", label: "References" },
@@ -365,21 +598,21 @@ const TOC_ITEMS = [
 
 // ── Main component ─────────────────────────────────────────────────────────
 
-export default function ResearchPaperView({ program, briefing, hypotheses }: Props) {
+export default function ResearchPaperView({ program, briefing, hypotheses, onHypothesisClick }: Props) {
   const [activeSection, setActiveSection] = useState("abstract")
   const [showAllExperiments, setShowAllExperiments] = useState(false)
+  const [highlightedRef, setHighlightedRef] = useState<string | null>(null)
   const sectionRefs = useRef<Record<string, HTMLDivElement | null>>({})
+  const referenceRowRefs = useRef<Record<string, HTMLDivElement | null>>({})
 
-  // Scroll spy via IntersectionObserver
+  // Scroll spy
   useEffect(() => {
     const observers: IntersectionObserver[] = []
     TOC_ITEMS.forEach(({ id }) => {
       const el = sectionRefs.current[id]
       if (!el) return
       const obs = new IntersectionObserver(
-        ([entry]) => {
-          if (entry.isIntersecting) setActiveSection(id)
-        },
+        ([entry]) => { if (entry.isIntersecting) setActiveSection(id) },
         { rootMargin: "-20% 0px -70% 0px", threshold: 0 }
       )
       obs.observe(el)
@@ -394,24 +627,46 @@ export default function ResearchPaperView({ program, briefing, hypotheses }: Pro
   }, [])
 
   const setSectionRef = useCallback(
-    (id: string) => (el: HTMLDivElement | null) => {
-      sectionRefs.current[id] = el
-    },
+    (id: string) => (el: HTMLDivElement | null) => { sectionRefs.current[id] = el },
     []
   )
+
+  // Called when a [H-NNN] citation badge is clicked
+  const handleCitationClick = useCallback((ref: string) => {
+    setHighlightedRef(ref)
+    const el = referenceRowRefs.current[ref]
+    if (el) {
+      el.scrollIntoView({ behavior: "smooth", block: "center" })
+      // Clear highlight after 2s
+      setTimeout(() => setHighlightedRef(null), 2000)
+    } else {
+      // Scroll to references section fallback
+      const sec = sectionRefs.current["references"]
+      if (sec) sec.scrollIntoView({ behavior: "smooth", block: "start" })
+      setTimeout(() => setHighlightedRef(null), 2000)
+    }
+  }, [])
 
   const mc = program.master_context
   const sortedHypotheses = [...hypotheses].sort((a, b) => b.plausibility_score - a.plausibility_score)
   const succeededHypotheses = sortedHypotheses.filter((h) => h.status === "succeeded")
   const failedHypotheses = sortedHypotheses.filter((h) => h.status === "failed")
-  const otherHypotheses = sortedHypotheses.filter(
-    (h) => h.status !== "succeeded" && h.status !== "failed"
-  )
 
   const displayedExperiments = showAllExperiments ? sortedHypotheses : sortedHypotheses.slice(0, 20)
 
-  // Build ref-id map keyed by hypothesis.id
+  // ref-id map keyed by hypothesis.id
   const refMap = new Map(sortedHypotheses.map((h, i) => [h.id, i]))
+
+  // Figure number map
+  const figureMap = new Map<string, number>()
+  let figureCounter = 1
+  for (const h of sortedHypotheses) {
+    if (h.visualization_mermaid || h.visualization_svg) {
+      figureMap.set(h.id, figureCounter++)
+    }
+  }
+
+  const hasFigures = figureMap.size > 0
 
   const generationCounts = hypotheses.reduce<Record<number, number>>((acc, h) => {
     acc[h.generation] = (acc[h.generation] || 0) + 1
@@ -442,7 +697,15 @@ export default function ResearchPaperView({ program, briefing, hypotheses }: Pro
       >
         <div style={{ fontSize: 32, lineHeight: 1, letterSpacing: "-0.02em" }}>[ ]</div>
         <div style={{ fontSize: 13 }}>No synthesis generated yet</div>
-        <div style={{ fontSize: 11, opacity: 0.6, maxWidth: 340, textAlign: "center", lineHeight: 1.6 }}>
+        <div
+          style={{
+            fontSize: 11,
+            opacity: 0.6,
+            maxWidth: 340,
+            textAlign: "center",
+            lineHeight: 1.6,
+          }}
+        >
           Click "Open Cross-Synthesis" after agents have completed experiments to generate the full research paper.
         </div>
         {hypotheses.length > 0 && (
@@ -455,14 +718,7 @@ export default function ResearchPaperView({ program, briefing, hypotheses }: Pro
   }
 
   return (
-    <div
-      style={{
-        display: "flex",
-        gap: 0,
-        width: "100%",
-        minHeight: "100%",
-      }}
-    >
+    <div style={{ display: "flex", gap: 0, width: "100%", minHeight: "100%" }}>
       {/* ── Table of Contents (sticky sidebar) ─────────────────────────── */}
       <div
         style={{
@@ -488,7 +744,16 @@ export default function ResearchPaperView({ program, briefing, hypotheses }: Pro
         >
           Contents
         </div>
-        {TOC_ITEMS.map(({ id, label }) => (
+        {TOC_ITEMS.filter(({ id }) => {
+          if (id === "figures" && !hasFigures) return false
+          if (id === "limitations" && !briefing.limitations) return false
+          if (id === "key-insights") return !!(mc?.key_insights && mc.key_insights.length > 0)
+          if (id === "promising") return !!(mc?.promising_directions && mc.promising_directions.length > 0)
+          if (id === "eliminated")
+            return !!((mc?.eliminated_approaches && mc.eliminated_approaches.length > 0) ||
+              (briefing.dead_ends && briefing.dead_ends.length > 0))
+          return true
+        }).map(({ id, label }) => (
           <button
             key={id}
             onClick={() => scrollTo(id)}
@@ -520,7 +785,15 @@ export default function ResearchPaperView({ program, briefing, hypotheses }: Pro
             gap: 5,
           }}
         >
-          <div style={{ fontSize: 9, color: "var(--text-muted)", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 2 }}>
+          <div
+            style={{
+              fontSize: 9,
+              color: "var(--text-muted)",
+              letterSpacing: "0.1em",
+              textTransform: "uppercase",
+              marginBottom: 2,
+            }}
+          >
             Stats
           </div>
           <div style={{ fontSize: 10, color: "var(--text-secondary)" }}>
@@ -552,7 +825,6 @@ export default function ResearchPaperView({ program, briefing, hypotheses }: Pro
       >
         {/* ── Paper header ──────────────────────────────────────────────── */}
         <div style={{ marginBottom: 40 }}>
-          {/* Top line */}
           <div
             style={{
               fontSize: 9,
@@ -565,7 +837,6 @@ export default function ResearchPaperView({ program, briefing, hypotheses }: Pro
             Axiom Synthesis Report · {formattedDate}
           </div>
 
-          {/* Title */}
           <h1
             style={{
               fontSize: 22,
@@ -573,14 +844,34 @@ export default function ResearchPaperView({ program, briefing, hypotheses }: Pro
               color: "var(--text-primary)",
               letterSpacing: "-0.02em",
               lineHeight: 1.3,
-              margin: "0 0 10px",
+              margin: "0 0 8px",
             }}
           >
             {program.title}
           </h1>
 
-          {/* Research question */}
-          <p style={{ fontSize: 13, color: "var(--text-secondary)", lineHeight: 1.65, margin: "0 0 18px", fontStyle: "italic" }}>
+          {/* Author / institution line */}
+          <div
+            style={{
+              fontSize: 12,
+              color: "var(--text-muted)",
+              marginBottom: 8,
+              fontStyle: "italic",
+            }}
+          >
+            Axiom Autonomous Research System &nbsp;·&nbsp;{" "}
+            <span style={{ textTransform: "capitalize" }}>{program.domain.replace(/_/g, " ")}</span>
+          </div>
+
+          <p
+            style={{
+              fontSize: 13,
+              color: "var(--text-secondary)",
+              lineHeight: 1.65,
+              margin: "0 0 18px",
+              fontStyle: "italic",
+            }}
+          >
             {program.research_question}
           </p>
 
@@ -597,8 +888,16 @@ export default function ResearchPaperView({ program, briefing, hypotheses }: Pro
           >
             <MetaBadge label="Domain" value={program.domain.replace(/_/g, " ")} />
             <MetaBadge label="Experiments" value={String(hypotheses.length)} />
-            <MetaBadge label="Succeeded" value={String(succeededHypotheses.length)} color="var(--stream-green)" />
-            <MetaBadge label="Failed" value={String(failedHypotheses.length)} color="var(--stream-red)" />
+            <MetaBadge
+              label="Succeeded"
+              value={String(succeededHypotheses.length)}
+              color="var(--stream-green)"
+            />
+            <MetaBadge
+              label="Failed"
+              value={String(failedHypotheses.length)}
+              color="var(--stream-red)"
+            />
             <MetaBadge
               label="Confidence"
               value={`${Math.round((mc?.confidence_level || 0) * 100)}%`}
@@ -613,11 +912,10 @@ export default function ResearchPaperView({ program, briefing, hypotheses }: Pro
           </div>
         </div>
 
-        {/* Full border divider */}
         <div style={{ height: 1, background: "var(--border)", marginBottom: 40 }} />
 
         {/* ── Abstract ──────────────────────────────────────────────────── */}
-        <div ref={setSectionRef("abstract")} style={{ marginBottom: 40 }}>
+        <div ref={setSectionRef("abstract")} style={{ marginBottom: 32 }}>
           <SectionDivider id="abstract" title="Abstract" />
           <div
             style={{
@@ -627,24 +925,69 @@ export default function ResearchPaperView({ program, briefing, hypotheses }: Pro
               borderRadius: 6,
             }}
           >
-            <ProseBlock text={briefing.abstract || briefing.executive_summary} />
+            <CitationProseBlock
+              text={briefing.abstract || briefing.executive_summary}
+              onCitationClick={handleCitationClick}
+            />
           </div>
         </div>
+
+        {/* ── Keywords ──────────────────────────────────────────────────── */}
+        {briefing.keywords && briefing.keywords.length > 0 && (
+          <div style={{ marginBottom: 40 }}>
+            <div
+              style={{
+                fontSize: 9,
+                color: "var(--text-muted)",
+                letterSpacing: "0.12em",
+                textTransform: "uppercase",
+                marginBottom: 8,
+              }}
+            >
+              Keywords
+            </div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+              {briefing.keywords.map((kw, i) => (
+                <span
+                  key={i}
+                  style={{
+                    fontSize: 11,
+                    color: "var(--text-secondary)",
+                    background: "var(--bg-card)",
+                    border: "1px solid var(--border)",
+                    borderRadius: 4,
+                    padding: "3px 9px",
+                    lineHeight: 1.5,
+                  }}
+                >
+                  {kw}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* ── Introduction ──────────────────────────────────────────────── */}
         <div ref={setSectionRef("introduction")} style={{ marginBottom: 40 }}>
           <SectionDivider id="introduction" number="1." title="Introduction" />
-          <ProseBlock text={briefing.introduction} />
+          <CitationProseBlock text={briefing.introduction} onCitationClick={handleCitationClick} />
         </div>
 
         {/* ── Methodology ───────────────────────────────────────────────── */}
         <div ref={setSectionRef("methodology")} style={{ marginBottom: 40 }}>
           <SectionDivider id="methodology" number="2." title="Methodology" />
-          <ProseBlock text={briefing.methodology} />
-          {/* Generation tree summary */}
+          <CitationProseBlock text={briefing.methodology} onCitationClick={handleCitationClick} />
           {Object.keys(generationCounts).length > 0 && (
             <div style={{ marginTop: 16, display: "flex", flexDirection: "column", gap: 4 }}>
-              <div style={{ fontSize: 9, color: "var(--text-muted)", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 6 }}>
+              <div
+                style={{
+                  fontSize: 9,
+                  color: "var(--text-muted)",
+                  letterSpacing: "0.1em",
+                  textTransform: "uppercase",
+                  marginBottom: 6,
+                }}
+              >
                 Hypothesis Tree
               </div>
               {Object.entries(generationCounts)
@@ -674,19 +1017,23 @@ export default function ResearchPaperView({ program, briefing, hypotheses }: Pro
         <div ref={setSectionRef("results")} style={{ marginBottom: 40 }}>
           <SectionDivider id="results" number="3." title="Results" />
 
-          {/* Stats row */}
-          <div
-            style={{
-              display: "flex",
-              gap: 12,
-              marginBottom: 20,
-              flexWrap: "wrap",
-            }}
-          >
+          <div style={{ display: "flex", gap: 12, marginBottom: 20, flexWrap: "wrap" }}>
             {[
-              { label: "Breakthrough Findings", count: briefing.key_findings.filter((f) => f.significance === "breakthrough").length, color: "var(--stream-green)" },
-              { label: "Promising Results", count: briefing.key_findings.filter((f) => f.significance === "promising").length, color: "var(--stream-blue)" },
-              { label: "Neutral", count: briefing.key_findings.filter((f) => f.significance === "neutral").length, color: "var(--text-muted)" },
+              {
+                label: "Breakthrough Findings",
+                count: briefing.key_findings.filter((f) => f.significance === "breakthrough").length,
+                color: "var(--stream-green)",
+              },
+              {
+                label: "Promising Results",
+                count: briefing.key_findings.filter((f) => f.significance === "promising").length,
+                color: "var(--stream-blue)",
+              },
+              {
+                label: "Neutral",
+                count: briefing.key_findings.filter((f) => f.significance === "neutral").length,
+                color: "var(--text-muted)",
+              },
               { label: "Dead Ends", count: failedHypotheses.length, color: "var(--stream-red)" },
             ].map(({ label, count, color }) => (
               <div
@@ -707,22 +1054,49 @@ export default function ResearchPaperView({ program, briefing, hypotheses }: Pro
             ))}
           </div>
 
-          {/* Key findings from briefing */}
           {briefing.key_findings.length > 0 && (
             <div style={{ marginBottom: 20 }}>
-              <div style={{ fontSize: 9, color: "var(--text-muted)", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 10 }}>
+              <div
+                style={{
+                  fontSize: 9,
+                  color: "var(--text-muted)",
+                  letterSpacing: "0.1em",
+                  textTransform: "uppercase",
+                  marginBottom: 10,
+                }}
+              >
                 Key Findings
               </div>
               <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                 {briefing.key_findings.map((finding, i) => {
                   const sigStyle =
                     finding.significance === "breakthrough"
-                      ? { color: "var(--stream-green)", border: "rgba(34,197,94,0.2)", bg: "rgba(34,197,94,0.05)", label: "BREAKTHROUGH" }
+                      ? {
+                          color: "var(--stream-green)",
+                          border: "rgba(34,197,94,0.2)",
+                          bg: "rgba(34,197,94,0.05)",
+                          label: "BREAKTHROUGH",
+                        }
                       : finding.significance === "promising"
-                      ? { color: "var(--stream-blue)", border: "rgba(59,130,246,0.2)", bg: "rgba(59,130,246,0.05)", label: "PROMISING" }
+                      ? {
+                          color: "var(--stream-blue)",
+                          border: "rgba(59,130,246,0.2)",
+                          bg: "rgba(59,130,246,0.05)",
+                          label: "PROMISING",
+                        }
                       : finding.significance === "dead_end"
-                      ? { color: "var(--stream-red)", border: "rgba(239,68,68,0.2)", bg: "rgba(239,68,68,0.05)", label: "DEAD END" }
-                      : { color: "var(--text-muted)", border: "rgba(113,113,122,0.15)", bg: "rgba(113,113,122,0.04)", label: "NEUTRAL" }
+                      ? {
+                          color: "var(--stream-red)",
+                          border: "rgba(239,68,68,0.2)",
+                          bg: "rgba(239,68,68,0.05)",
+                          label: "DEAD END",
+                        }
+                      : {
+                          color: "var(--text-muted)",
+                          border: "rgba(113,113,122,0.15)",
+                          bg: "rgba(113,113,122,0.04)",
+                          label: "NEUTRAL",
+                        }
 
                   const hypoIdx = sortedHypotheses.findIndex((h) => h.id === finding.hypothesis_id)
                   const ref = hypoIdx >= 0 ? refId(hypoIdx) : null
@@ -750,16 +1124,27 @@ export default function ResearchPaperView({ program, briefing, hypotheses }: Pro
                         >
                           {sigStyle.label}
                         </span>
-                        <span style={{ fontWeight: 500, fontSize: 12, color: "var(--text-primary)" }}>
+                        <span
+                          style={{ fontWeight: 500, fontSize: 12, color: "var(--text-primary)" }}
+                        >
                           {finding.title}
                         </span>
                         {ref && (
-                          <span style={{ fontSize: 9, color: "var(--text-muted)", marginLeft: "auto" }}>
+                          <span
+                            style={{ fontSize: 9, color: "var(--text-muted)", marginLeft: "auto" }}
+                          >
                             [{ref}]
                           </span>
                         )}
                       </div>
-                      <p style={{ fontSize: 12, color: "var(--text-secondary)", margin: 0, lineHeight: 1.65 }}>
+                      <p
+                        style={{
+                          fontSize: 12,
+                          color: "var(--text-secondary)",
+                          margin: 0,
+                          lineHeight: 1.65,
+                        }}
+                      >
                         {finding.summary}
                       </p>
                     </div>
@@ -771,7 +1156,15 @@ export default function ResearchPaperView({ program, briefing, hypotheses }: Pro
 
           {/* All experiments */}
           <div>
-            <div style={{ fontSize: 9, color: "var(--text-muted)", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 10 }}>
+            <div
+              style={{
+                fontSize: 9,
+                color: "var(--text-muted)",
+                letterSpacing: "0.1em",
+                textTransform: "uppercase",
+                marginBottom: 10,
+              }}
+            >
               All Experiments ({hypotheses.length})
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
@@ -782,6 +1175,7 @@ export default function ResearchPaperView({ program, briefing, hypotheses }: Pro
                     key={h.id}
                     hypothesis={h}
                     index={idx}
+                    figureNumber={figureMap.get(h.id) ?? null}
                     defaultExpanded={false}
                   />
                 )
@@ -808,6 +1202,18 @@ export default function ResearchPaperView({ program, briefing, hypotheses }: Pro
             )}
           </div>
         </div>
+
+        {/* ── Figure Gallery ─────────────────────────────────────────────── */}
+        {hasFigures && (
+          <div ref={setSectionRef("figures")} style={{ marginBottom: 40 }}>
+            <SectionDivider id="figures" title="Figures" />
+            <FigureGallery
+              hypotheses={sortedHypotheses}
+              figureMap={figureMap}
+              refMap={refMap}
+            />
+          </div>
+        )}
 
         {/* ── Key Insights ──────────────────────────────────────────────── */}
         {mc?.key_insights && mc.key_insights.length > 0 && (
@@ -849,7 +1255,10 @@ export default function ResearchPaperView({ program, briefing, hypotheses }: Pro
         {/* ── Discussion ────────────────────────────────────────────────── */}
         <div ref={setSectionRef("discussion")} style={{ marginBottom: 40 }}>
           <SectionDivider id="discussion" number="5." title="Discussion" />
-          <ProseBlock text={briefing.discussion || briefing.narrative} />
+          <CitationProseBlock
+            text={briefing.discussion || briefing.narrative}
+            onCitationClick={handleCitationClick}
+          />
         </div>
 
         {/* ── Promising Directions ──────────────────────────────────────── */}
@@ -873,30 +1282,55 @@ export default function ResearchPaperView({ program, briefing, hypotheses }: Pro
           <div ref={setSectionRef("eliminated")} style={{ marginBottom: 40 }}>
             <SectionDivider id="eliminated" number="7." title="Eliminated Approaches" />
             <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              {/* From master context */}
               {mc?.eliminated_approaches?.map((approach, i) => (
                 <div key={`mc-${i}`} style={{ display: "flex", gap: 12, fontSize: 12 }}>
                   <span style={{ color: "var(--stream-red)", flexShrink: 0 }}>×</span>
                   <span style={{ color: "var(--text-secondary)", lineHeight: 1.65 }}>{approach}</span>
                 </div>
               ))}
-              {/* From briefing dead ends (de-duplicate with MC ones visually) */}
               {briefing.dead_ends
-                .filter((d) => !(mc?.eliminated_approaches || []).some((e) => e.includes(d.slice(0, 20))))
+                .filter(
+                  (d) =>
+                    !(mc?.eliminated_approaches || []).some((e) => e.includes(d.slice(0, 20)))
+                )
                 .map((d, i) => (
                   <div key={`de-${i}`} style={{ display: "flex", gap: 12, fontSize: 12 }}>
                     <span style={{ color: "var(--stream-red)", flexShrink: 0, opacity: 0.6 }}>×</span>
-                    <span style={{ color: "var(--text-secondary)", lineHeight: 1.65, opacity: 0.8 }}>{d}</span>
+                    <span
+                      style={{ color: "var(--text-secondary)", lineHeight: 1.65, opacity: 0.8 }}
+                    >
+                      {d}
+                    </span>
                   </div>
                 ))}
             </div>
           </div>
         )}
 
+        {/* ── Limitations ───────────────────────────────────────────────── */}
+        {briefing.limitations && (
+          <div ref={setSectionRef("limitations")} style={{ marginBottom: 40 }}>
+            <SectionDivider id="limitations" number="8." title="Limitations" />
+            <div
+              style={{
+                padding: "14px 18px",
+                background: "rgba(234,179,8,0.04)",
+                border: "1px solid rgba(234,179,8,0.15)",
+                borderRadius: 6,
+              }}
+            >
+              <CitationProseBlock
+                text={briefing.limitations}
+                onCitationClick={handleCitationClick}
+              />
+            </div>
+          </div>
+        )}
+
         {/* ── Conclusion ────────────────────────────────────────────────── */}
         <div ref={setSectionRef("conclusion")} style={{ marginBottom: 40 }}>
-          <SectionDivider id="conclusion" number="8." title="Conclusion" />
-          <ProseBlock text={briefing.conclusion} />
+          <SectionDivider id="conclusion" number="9." title="Conclusion" />
+          <CitationProseBlock text={briefing.conclusion} onCitationClick={handleCitationClick} />
           {mc?.current_focus && (
             <div
               style={{
@@ -907,10 +1341,20 @@ export default function ResearchPaperView({ program, briefing, hypotheses }: Pro
                 borderRadius: 5,
               }}
             >
-              <div style={{ fontSize: 9, color: "var(--stream-blue)", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 6 }}>
+              <div
+                style={{
+                  fontSize: 9,
+                  color: "var(--stream-blue)",
+                  letterSpacing: "0.1em",
+                  textTransform: "uppercase",
+                  marginBottom: 6,
+                }}
+              >
                 Current Focus
               </div>
-              <p style={{ fontSize: 12, color: "var(--text-secondary)", lineHeight: 1.65, margin: 0 }}>
+              <p
+                style={{ fontSize: 12, color: "var(--text-secondary)", lineHeight: 1.65, margin: 0 }}
+              >
                 {mc.current_focus}
               </p>
             </div>
@@ -920,7 +1364,7 @@ export default function ResearchPaperView({ program, briefing, hypotheses }: Pro
         {/* ── Next Steps ────────────────────────────────────────────────── */}
         {briefing.recommended_next_steps && briefing.recommended_next_steps.length > 0 && (
           <div ref={setSectionRef("next-steps")} style={{ marginBottom: 40 }}>
-            <SectionDivider id="next-steps" number="9." title="Recommended Next Steps" />
+            <SectionDivider id="next-steps" number="10." title="Recommended Next Steps" />
             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
               {briefing.recommended_next_steps.map((step, i) => (
                 <div key={i} style={{ display: "flex", gap: 14, fontSize: 12 }}>
@@ -944,26 +1388,173 @@ export default function ResearchPaperView({ program, briefing, hypotheses }: Pro
         {/* ── References ────────────────────────────────────────────────── */}
         <div ref={setSectionRef("references")} style={{ marginBottom: 40 }}>
           <SectionDivider id="references" number="Ref." title="References" />
-          <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
             {sortedHypotheses.map((h, i) => {
-              const style = STATUS_STYLE[h.status] ?? STATUS_STYLE.queued
+              const statusStyle = STATUS_STYLE[h.status] ?? STATUS_STYLE.queued
+              const clickable = !!onHypothesisClick
+              const rid = refId(i)
+              const isHighlighted = highlightedRef === rid
+              const score = Math.round(h.plausibility_score * 100)
+
               return (
                 <div
                   key={h.id}
-                  style={{ display: "flex", gap: 10, fontSize: 11, padding: "4px 0", borderBottom: "1px solid rgba(42,42,46,0.5)" }}
+                  ref={(el) => { referenceRowRefs.current[rid] = el }}
+                  onClick={clickable ? () => onHypothesisClick(h.id) : undefined}
+                  style={{
+                    display: "flex",
+                    gap: 14,
+                    padding: "10px 12px",
+                    borderRadius: 5,
+                    border: `1px solid ${isHighlighted ? "rgba(59,130,246,0.4)" : "var(--border)"}`,
+                    background: isHighlighted
+                      ? "rgba(59,130,246,0.06)"
+                      : "transparent",
+                    cursor: clickable ? "pointer" : "default",
+                    transition: "background 0.2s, border-color 0.2s",
+                  }}
+                  onMouseEnter={
+                    clickable
+                      ? (e) => {
+                          ;(e.currentTarget as HTMLDivElement).style.background =
+                            "var(--bg-elevated)"
+                        }
+                      : undefined
+                  }
+                  onMouseLeave={
+                    clickable
+                      ? (e) => {
+                          ;(e.currentTarget as HTMLDivElement).style.background = isHighlighted
+                            ? "rgba(59,130,246,0.06)"
+                            : "transparent"
+                        }
+                      : undefined
+                  }
                 >
-                  <span style={{ color: "var(--text-muted)", flexShrink: 0, width: 40, fontVariantNumeric: "tabular-nums" }}>
-                    [{refId(i)}]
-                  </span>
-                  <span style={{ flex: 1, color: "var(--text-secondary)", lineHeight: 1.5 }}>
-                    {h.title}
-                  </span>
-                  <span style={{ color: style.color, fontSize: 9, flexShrink: 0, alignSelf: "center" }}>
-                    {style.label}
-                  </span>
-                  <span style={{ color: "var(--text-muted)", fontSize: 9, flexShrink: 0, alignSelf: "center", width: 28, textAlign: "right" }}>
-                    {Math.round(h.plausibility_score * 100)}%
-                  </span>
+                  {/* Ref ID column */}
+                  <div
+                    style={{
+                      flexShrink: 0,
+                      width: 46,
+                      paddingTop: 1,
+                    }}
+                  >
+                    <span
+                      style={{
+                        fontSize: 10,
+                        color: "var(--text-muted)",
+                        fontVariantNumeric: "tabular-nums",
+                        fontFamily: "monospace",
+                      }}
+                    >
+                      [{rid}]
+                    </span>
+                  </div>
+
+                  {/* Bibliographic content */}
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    {/* Title line */}
+                    <div style={{ display: "flex", alignItems: "flex-start", gap: 8, marginBottom: 4 }}>
+                      <span
+                        style={{
+                          fontSize: 12,
+                          color: clickable ? "var(--stream-blue)" : "var(--text-primary)",
+                          fontWeight: 500,
+                          lineHeight: 1.5,
+                          flex: 1,
+                        }}
+                      >
+                        &ldquo;{h.title}&rdquo;
+                      </span>
+                      {clickable && (
+                        <span
+                          style={{
+                            color: "var(--stream-blue)",
+                            fontSize: 9,
+                            flexShrink: 0,
+                            opacity: 0.6,
+                            marginTop: 3,
+                          }}
+                        >
+                          ↗
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Bibliographic meta line */}
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 8,
+                        marginBottom: h.approach || h.conclusion || h.failure_reason ? 6 : 0,
+                        flexWrap: "wrap",
+                      }}
+                    >
+                      <span
+                        style={{
+                          fontSize: 9,
+                          color: statusStyle.color,
+                          border: `1px solid ${statusStyle.border}`,
+                          borderRadius: 3,
+                          padding: "1px 5px",
+                          letterSpacing: "0.07em",
+                        }}
+                      >
+                        {statusStyle.label}
+                      </span>
+                      <span style={{ fontSize: 9, color: "var(--text-muted)" }}>
+                        Plausibility: {score}%
+                      </span>
+                      <span style={{ fontSize: 9, color: "var(--text-muted)" }}>
+                        · Gen {h.generation}
+                      </span>
+                    </div>
+
+                    {/* Approach excerpt */}
+                    {h.approach && (
+                      <p
+                        style={{
+                          fontSize: 11,
+                          color: "var(--text-muted)",
+                          lineHeight: 1.55,
+                          margin: "0 0 4px",
+                        }}
+                      >
+                        <span
+                          style={{
+                            fontWeight: 500,
+                            color: "var(--text-secondary)",
+                          }}
+                        >
+                          Approach:{" "}
+                        </span>
+                        {truncate(h.approach, 160)}
+                      </p>
+                    )}
+
+                    {/* Conclusion / failure reason excerpt */}
+                    {(h.conclusion || h.failure_reason) && (
+                      <p
+                        style={{
+                          fontSize: 11,
+                          color: "var(--text-muted)",
+                          lineHeight: 1.55,
+                          margin: 0,
+                        }}
+                      >
+                        <span
+                          style={{
+                            fontWeight: 500,
+                            color: "var(--text-secondary)",
+                          }}
+                        >
+                          {h.status === "failed" ? "Failure: " : "Conclusion: "}
+                        </span>
+                        {truncate(h.conclusion || h.failure_reason, 200)}
+                      </p>
+                    )}
+                  </div>
                 </div>
               )
             })}
@@ -989,10 +1580,19 @@ function MetaBadge({ label, value, color }: { label: string; value: string; colo
         borderRadius: 4,
       }}
     >
-      <span style={{ fontSize: 9, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em" }}>
+      <span
+        style={{
+          fontSize: 9,
+          color: "var(--text-muted)",
+          textTransform: "uppercase",
+          letterSpacing: "0.08em",
+        }}
+      >
         {label}
       </span>
-      <span style={{ fontSize: 11, color: color || "var(--text-secondary)", textTransform: "capitalize" }}>
+      <span
+        style={{ fontSize: 11, color: color || "var(--text-secondary)", textTransform: "capitalize" }}
+      >
         {value}
       </span>
     </div>

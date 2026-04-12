@@ -1,4 +1,4 @@
-import type { Domain } from "@/lib/types"
+import type { Domain, Finding } from "@/lib/types"
 import { doClient, CODE_MODEL } from "./client"
 
 const DOMAIN_IMPORTS: Record<Domain, string> = {
@@ -20,13 +20,24 @@ export async function writeExperimentCode(params: {
   masterContext: string
   previousFindings: string[]
   searchContext?: string
+  syntaxFeedback?: string
+  siblingFindings?: Finding[]
 }): Promise<string> {
-  const { hypothesis, approach, domain, masterContext, previousFindings, searchContext = "" } =
+  const { hypothesis, approach, domain, masterContext, previousFindings, searchContext = "", syntaxFeedback, siblingFindings = [] } =
     params
 
   const previousContext =
     previousFindings.length > 0
       ? `\nPrevious findings from earlier sessions:\n${previousFindings.slice(0, 5).join("\n")}`
+      : ""
+
+  const siblingContext =
+    siblingFindings.length > 0
+      ? `\nFindings from ${siblingFindings.length} parallel agent(s) working on this program:\n` +
+        siblingFindings
+          .slice(0, 10)
+          .map((f) => `[${f.type.toUpperCase()}] ${f.description} (confidence: ${Math.round(f.confidence * 100)}%) → ${f.implication}`)
+          .join("\n")
       : ""
 
   const response = await doClient.chat.completions.create({
@@ -55,7 +66,7 @@ CRITICAL RULES:
 Hypothesis: ${hypothesis}
 Approach: ${approach}
 Scientific context: ${(masterContext || "").slice(0, 500)}
-${previousContext}${searchContext}
+${previousContext}${siblingContext}${searchContext}${syntaxFeedback ? `\n\nPREVIOUS ATTEMPT HAD A SYNTAX ERROR — you must fix it before returning the code:\n${syntaxFeedback}` : ""}
 
 Write a complete, self-contained Python script to test this hypothesis computationally.`,
       },
@@ -64,8 +75,12 @@ Write a complete, self-contained Python script to test this hypothesis computati
     temperature: 0.3,
   })
 
-  return (
+  let code =
     response.choices[0].message.content ||
     "print('ERROR: No code generated')\nprint('CONCLUSION: Code generation failed')"
-  )
+
+  // Strip markdown code fences if the model wrapped the output despite instructions
+  code = code.replace(/^```(?:python)?\n?/m, "").replace(/\n?```\s*$/m, "").trim()
+
+  return code
 }
