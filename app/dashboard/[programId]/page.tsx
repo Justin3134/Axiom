@@ -302,13 +302,13 @@ export default function ProgramPage({
             <span style={{ color: "var(--border-bright)", fontSize: 14 }}>/</span>
 
             <span
+              className="scroll-x-hidden"
               style={{
                 fontSize: 12,
                 color: "var(--text-secondary)",
-                overflow: "hidden",
-                textOverflow: "ellipsis",
                 whiteSpace: "nowrap",
-                maxWidth: 300,
+                maxWidth: 400,
+                display: "inline-block",
               }}
             >
               {program.title}

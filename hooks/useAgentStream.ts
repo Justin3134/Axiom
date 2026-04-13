@@ -8,6 +8,36 @@ export function useAgentStream(programId: string, hypothesisId?: string) {
   const eventSourceRef = useRef<EventSource | null>(null)
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const mountedRef = useRef(true)
+  // Track the highest log index already loaded so SSE only appends new entries
+  const historicalCountRef = useRef(0)
+
+  const addLogs = useCallback((incoming: AgentLog[]) => {
+    setLogs((prev) => {
+      const existingIds = new Set(prev.map((l) => l.id))
+      const fresh = incoming.filter((l) => !existingIds.has(l.id))
+      if (fresh.length === 0) return prev
+      return [...prev, ...fresh].slice(-500)
+    })
+  }, [])
+
+  // Pre-fetch all historical logs immediately (no SSE wait)
+  useEffect(() => {
+    if (!programId || !hypothesisId) return
+    mountedRef.current = true
+
+    fetch(`/api/hypotheses/${hypothesisId}/logs?programId=${programId}`)
+      .then((r) => r.json())
+      .then((data: { logs?: AgentLog[] }) => {
+        if (!mountedRef.current) return
+        if (Array.isArray(data.logs) && data.logs.length > 0) {
+          historicalCountRef.current = data.logs.length
+          addLogs(data.logs)
+        }
+      })
+      .catch(() => {/* non-fatal */})
+
+    return () => { mountedRef.current = false }
+  }, [programId, hypothesisId, addLogs])
 
   const connect = useCallback(() => {
     if (!programId || !mountedRef.current) return
@@ -27,11 +57,7 @@ export function useAgentStream(programId: string, hypothesisId?: string) {
       if (!event.data || event.data.trim() === "") return
       try {
         const log: AgentLog = JSON.parse(event.data)
-        setLogs((prev) => {
-          const exists = prev.some((l) => l.id === log.id)
-          if (exists) return prev
-          return [...prev.slice(-200), log] // Keep last 200 log entries
-        })
+        addLogs([log])
       } catch {
         // Non-JSON heartbeat lines — ignore
       }
@@ -44,7 +70,7 @@ export function useAgentStream(programId: string, hypothesisId?: string) {
         reconnectTimerRef.current = setTimeout(connect, 3000)
       }
     }
-  }, [programId, hypothesisId])
+  }, [programId, hypothesisId, addLogs])
 
   useEffect(() => {
     mountedRef.current = true

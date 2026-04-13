@@ -1,6 +1,9 @@
 import { tavily } from "@tavily/core"
 
-const client = tavily({ apiKey: process.env.TAVILY_API_KEY! })
+const primaryClient = tavily({ apiKey: process.env.TAVILY_API_KEY! })
+const fallbackClient = process.env.TAVILY_API_KEY_FALLBACK
+  ? tavily({ apiKey: process.env.TAVILY_API_KEY_FALLBACK })
+  : null
 
 export interface SearchResult {
   title: string
@@ -17,33 +20,40 @@ export async function searchScientificContext(params: {
 }): Promise<SearchResult[]> {
   const { hypothesis, domain, maxResults = 5 } = params
 
-  try {
-    const response = await client.search(
-      `${domain} research: ${hypothesis.slice(0, 200)}`,
-      {
-        searchDepth: "advanced",
-        maxResults,
-        includeDomains: [
-          "pubmed.ncbi.nlm.nih.gov",
-          "arxiv.org",
-          "nature.com",
-          "science.org",
-          "cell.com",
-          "biorxiv.org",
-          "scholar.google.com",
-          "semanticscholar.org",
-        ],
-      }
-    )
+  const query = `${domain} research: ${hypothesis.slice(0, 200)}`
+  const searchOptions = {
+    searchDepth: "advanced" as const,
+    maxResults,
+    includeDomains: [
+      "pubmed.ncbi.nlm.nih.gov",
+      "arxiv.org",
+      "nature.com",
+      "science.org",
+      "cell.com",
+      "biorxiv.org",
+      "scholar.google.com",
+      "semanticscholar.org",
+    ],
+  }
 
-    return (response.results || []).map((r) => ({
+  const toResults = (response: Awaited<ReturnType<typeof primaryClient.search>>) =>
+    (response.results || []).map((r) => ({
       title: r.title || "",
       url: r.url || "",
       content: r.content || "",
       score: r.score || 0,
     }))
+
+  try {
+    return toResults(await primaryClient.search(query, searchOptions))
   } catch {
-    // Non-fatal — experiment proceeds without search context
+    if (fallbackClient) {
+      try {
+        return toResults(await fallbackClient.search(query, searchOptions))
+      } catch {
+        // Non-fatal — experiment proceeds without search context
+      }
+    }
     return []
   }
 }

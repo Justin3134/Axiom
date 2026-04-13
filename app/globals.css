@@ -137,6 +137,15 @@ body {
   font-size: 0.75rem;
 }
 
+/* ─── Scrollable text (no visible scrollbar) ──────────────────── */
+.scroll-x-hidden {
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.scroll-x-hidden::-webkit-scrollbar {
+  display: none;
+}
+
 /* ─── Utilities ───────────────────────────────────────────────── */
 button, input, textarea, select { outline: none; }
 

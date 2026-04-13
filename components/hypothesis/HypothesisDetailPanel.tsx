@@ -665,7 +665,7 @@ export default function HypothesisDetailPanel({
             </div>
 
             {h.approach && (
-              <p style={{ fontSize: 11, color: "#71717a", lineHeight: 1.6, margin: "0 0 12px", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" as const, overflow: "hidden" }}>
+              <p style={{ fontSize: 11, color: "#71717a", lineHeight: 1.6, margin: "0 0 12px" }}>
                 {h.approach}
               </p>
             )}
@@ -911,7 +911,7 @@ export default function HypothesisDetailPanel({
               Conclusion
             </div>
             {displayConclusion ? (
-              <p style={{ fontSize: 13, color: "#c4c4c8", lineHeight: 1.7, margin: 0, whiteSpace: "pre-wrap", display: "-webkit-box", WebkitLineClamp: 5, WebkitBoxOrient: "vertical" as const, overflow: "hidden" }}>
+              <p style={{ fontSize: 13, color: "#c4c4c8", lineHeight: 1.7, margin: 0, whiteSpace: "pre-wrap" }}>
                 {displayConclusion}
               </p>
             ) : (
