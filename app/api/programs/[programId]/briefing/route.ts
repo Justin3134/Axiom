@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { getProgram, getProgramHypotheses, saveBriefing } from "@/lib/redis/db"
 import { generateBriefing } from "@/lib/ai/brain"
-import type { Hypothesis } from "@/lib/types"
+import type { BriefingFinding, Hypothesis } from "@/lib/types"
 
 interface Params {
   params: Promise<{ programId: string }>
@@ -32,7 +32,7 @@ export async function POST(_req: NextRequest, { params }: Params) {
       hypotheses,
     })
 
-    const keyFindings = hypotheses
+    const keyFindings: BriefingFinding[] = hypotheses
       .filter((h) => h.status === "succeeded" && h.conclusion)
       .slice(0, 10)
       .map((h) => ({
