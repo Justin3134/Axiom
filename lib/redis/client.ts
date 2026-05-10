@@ -1,7 +1,10 @@
 import Redis from "ioredis"
 
 // Redis Cloud TCP connection
-export const redis = new Redis(process.env.REDIS_URL!, {
-  maxRetriesPerRequest: 3,
-  lazyConnect: false,
-})
+const redisUrl = process.env.REDIS_URL
+export const redis = (redisUrl
+  ? new Redis(redisUrl, {
+      maxRetriesPerRequest: 3,
+      lazyConnect: true,
+    })
+  : (null as unknown as Redis))

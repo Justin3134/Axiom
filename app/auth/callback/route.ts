@@ -39,7 +39,7 @@ export async function GET(req: NextRequest) {
       maxAge: 60 * 60 * 24 * 7,
       path: "/",
     })
-    response.cookies.delete(oauthStateCookieName, { path: "/" })
+    response.cookies.delete(oauthStateCookieName)
     return response
   } catch (error) {
     return NextResponse.redirect(new URL("/auth/login?error=token_exchange_failed", origin))

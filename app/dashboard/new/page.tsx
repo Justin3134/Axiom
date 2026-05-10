@@ -1,3 +1,4 @@
+import { Suspense } from "react"
 import Link from "next/link"
 import NewProgramForm from "@/components/programs/NewProgramForm"
 
@@ -61,7 +62,9 @@ export default function NewProgramPage() {
           </p>
         </div>
 
-        <NewProgramForm />
+        <Suspense fallback={null}>
+          <NewProgramForm />
+        </Suspense>
       </div>
     </div>
   )

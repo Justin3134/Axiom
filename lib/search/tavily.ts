@@ -1,6 +1,8 @@
 import { tavily } from "@tavily/core"
 
-const primaryClient = tavily({ apiKey: process.env.TAVILY_API_KEY! })
+const primaryClient = process.env.TAVILY_API_KEY
+  ? tavily({ apiKey: process.env.TAVILY_API_KEY })
+  : null
 const fallbackClient = process.env.TAVILY_API_KEY_FALLBACK
   ? tavily({ apiKey: process.env.TAVILY_API_KEY_FALLBACK })
   : null
@@ -36,13 +38,17 @@ export async function searchScientificContext(params: {
     ],
   }
 
-  const toResults = (response: Awaited<ReturnType<typeof primaryClient.search>>) =>
-    (response.results || []).map((r) => ({
+  const toResults = (response: any) =>
+    (response?.results || []).map((r: any) => ({
       title: r.title || "",
       url: r.url || "",
       content: r.content || "",
       score: r.score || 0,
     }))
+
+  if (!primaryClient) {
+    return []
+  }
 
   try {
     return toResults(await primaryClient.search(query, searchOptions))

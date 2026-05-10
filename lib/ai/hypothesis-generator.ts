@@ -32,11 +32,11 @@ function extractJsonArray(text: string): unknown[] {
 }
 
 /** Call the model and parse a JSON array response, retrying once on parse failure. */
-async function callForJsonArray(
+async function callForJsonArray<T>(
   prompt: string,
   maxTokens: number,
   retries = 1,
-): Promise<unknown[]> {
+): Promise<T[]> {
   for (let attempt = 0; attempt <= retries; attempt++) {
     const response = await doClient.chat.completions.create({
       model: REASONING_MODEL,
@@ -46,7 +46,7 @@ async function callForJsonArray(
 
     const text = response.choices[0].message.content ?? "[]"
     try {
-      return extractJsonArray(text)
+      return extractJsonArray(text) as T[]
     } catch (err) {
       if (attempt < retries) {
         console.warn(`[hypothesis-generator] JSON parse failed (attempt ${attempt + 1}), retrying…`, err)
@@ -89,16 +89,16 @@ Schema:
   "priorityRank": 1
 }]`
 
-  const parsed = await callForJsonArray(prompt, 8000)
-
-  return (parsed as {
+  const parsed = await callForJsonArray<{
     title: string
     description: string
     rationale: string
     approach: string
     plausibilityScore: number
     priorityRank: number
-  }[]).map((h, i) => ({
+  }>(prompt, 8000)
+
+  return parsed.map((h, i) => ({
     title: h.title ?? `Hypothesis ${i + 1}`,
     description: h.description ?? "",
     rationale: h.rationale ?? "",
@@ -162,5 +162,7 @@ Return ONLY a valid JSON array. No markdown, no prose. Start with [ and end with
   "plausibility_score": 0.75
 }]`
 
-  return callForJsonArray(prompt, 3000)
+  return callForJsonArray<
+    Omit<CreateHypothesisPayload, "program_id" | "parent_id" | "depth" | "generation" | "branch_path">
+  >(prompt, 3000)
 }
